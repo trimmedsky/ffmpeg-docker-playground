@@ -18,6 +18,14 @@ jobs:
       - name: Build
         run: docker build . -t ffmpeg-test
 
+      # "Is the binary built the way it should be?" - build options, codec table,
+      # pkg-config.
+      - name: Run build tests
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/tests:/tests:ro" \
+            ffmpeg-test bash /tests/run-build-tests.sh
+
       # "Can this build encode X at all?" - the capability check.
       - name: Run media tests
         run: |
