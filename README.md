@@ -21,14 +21,12 @@ Three suites, each answering a different question. All of them run in CI on ever
 (`.github/workflows/test-build.yml`), and all of them can be run locally against an image
 you just built.
 
-### 1. Is the binary built the way it should be? (serverspec)
+### 1. Is the binary built the way it should be? (build tests)
 
 ```
-# To run serverspec, ruby and `gem install bundler` required
-pushd serverspec
-bundle install
-bundle exec rspec   # Run serverspec with 'ffmpeg' image
-popd
+docker run --rm \
+  -v "$PWD/tests:/tests:ro" \
+  ffmpeg bash /tests/run-build-tests.sh
 ```
 
 ### 2. Can it encode/decode the formats at all? (capability tests)
@@ -64,4 +62,4 @@ directory.
 
 ## Update libraries
 
-Modify version number `ARG`s in `Dockerfile`, then run `docker build` and `rspec` (serverspec) again.
+Modify version number `ARG`s in `Dockerfile`, then run `docker build` and the test suites again.
