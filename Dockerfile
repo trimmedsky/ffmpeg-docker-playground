@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Don't update bootloader: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=594189
@@ -47,15 +47,15 @@ RUN mkdir -p ${BUILD_DIR} && \
     echo DEPS_CONFIGURE_OPTS: ${DEPS_CONFIGURE_OPTS}
 
 # Install freetype once, but re-install after harfbuzz installed
-ARG FREETYPE_VERSION=2.14.2
-RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL http://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz | tar -zx && \
+ARG FREETYPE_VERSION=2.14.3
+RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://download-mirror.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz | tar -zx && \
     cd freetype-${FREETYPE_VERSION} && \
     ./configure ${DEPS_CONFIGURE_OPTS} | tee -a configure-pre.log && \
     make ${MAKEFLAGS} > make-pre.log 2>&1 && make install 2>&1 | tee -a make-pre.log | tee -a make-pre.log && \
     pkg-config freetype2 --modversion
 
 # Install harfbuzz with freetype support (>= 3.0 uses meson, download from GitHub)
-ARG HARFBUZZ_VERSION=13.2.1
+ARG HARFBUZZ_VERSION=14.4.0
 RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/harfbuzz/harfbuzz/releases/download/${HARFBUZZ_VERSION}/harfbuzz-${HARFBUZZ_VERSION}.tar.xz | tar -Jx && \
     cd harfbuzz-${HARFBUZZ_VERSION} && \
     meson setup build --prefix=${PREFIX} --default-library=static --buildtype=release -Dfreetype=enabled -Dtests=disabled -Ddocs=disabled 2>&1 | tee -a configure.log && \
@@ -77,7 +77,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/fribidi/fr
     pkg-config fribidi --modversion
 
 # fontconfig (depends on libexpat)
-ARG FONTCONFIG_VERSION=2.16.0
+ARG FONTCONFIG_VERSION=2.18.3
 # Without ldconfig, fontconfig fails to build (requires to load libfreetype for cache preloading in `make install`)
 RUN ldconfig
 # Pull the release tarball from gitlab.freedesktop.org's package registry instead of
@@ -92,7 +92,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -fsSL --retry 3 --retry-delay 5 h
     pkg-config fontconfig --modversion
 
 # libass (depends on fontconfig, fridibi)
-ARG LIBASS_VERSION=0.17.4
+ARG LIBASS_VERSION=0.17.5
 RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/libass/libass/releases/download/${LIBASS_VERSION}/libass-${LIBASS_VERSION}.tar.gz | tar -zx && \
     cd libass-${LIBASS_VERSION} && \
     ./configure ${DEPS_CONFIGURE_OPTS} --enable-fontconfig | tee -a configure.log && \
@@ -109,7 +109,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch stable --depth 1 ht
 
 # x265
 # https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
-ARG X265_VERSION=4.1
+ARG X265_VERSION=4.2
 RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${X265_VERSION} --depth 1 https://bitbucket.org/multicoreware/x265_git && \
     cd x265_git/build/linux && \
     cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="${PREFIX}" ../../source 2>&1 | tee -a configure.log && \
@@ -133,24 +133,38 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL http://downloads.xiph.org/rel
     pkg-config vorbis --modversion
 
 # theora
-ARG THEORA_VERSION=1.1.1
-# `sed -i 's/png_\(sizeof\)/\1/g' examples/png2theora.c` is to fix bug (with libpng >= 1.6)
-# Update config.guess/config.sub for ARM support (theora's copies are from 2002)
+ARG THEORA_VERSION=1.2.0
+# The examples/png2theora.c `png_sizeof` macro-removal sed and the config.guess/config.sub
+# copy-in for ARM support (needed against theora's 2002-vintage bundled copies) are no longer
+# needed as of 1.2.0: png2theora.c no longer uses `png_sizeof`, and theora now bundles a
+# 2022 config.guess/config.sub that already recognizes aarch64.
 RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://ftp.osuosl.org/pub/xiph/releases/theora/libtheora-${THEORA_VERSION}.tar.gz | tar -zx && \
     cd libtheora-${THEORA_VERSION} && \
-    sed -i 's/png_\(sizeof\)/\1/g' examples/png2theora.c && \
-    cp /usr/share/misc/config.guess . && cp /usr/share/misc/config.sub . && \
     ./configure ${DEPS_CONFIGURE_OPTS} --with-ogg=${PREFIX} | tee -a configure.log && \
     make ${MAKEFLAGS} 2>&1 | tee -a make.log && make install 2>&1 | tee -a make.log && \
     pkg-config theora --modversion
 
 # lame
-ARG LAME_VERSION=3.100
+ARG LAME_VERSION=4.0
+# --disable-decoder: lame 4.0 added an optional on-the-fly mpg123-based decoder (used by the
+# `lame` CLI frontend and for more accurate replaygain) and configure hard-errors if libmpg123
+# isn't present instead of just skipping it. We only need the libmp3lame encoder that ffmpeg
+# links against, so disable it rather than adding a new apt dependency for an unused feature.
+#
+# --disable-frontend: lame 4.0's frontend/parse.c (the `lame` CLI's ID3v2-tag argument parsing,
+# compiled unconditionally, not behind any configure check) calls id3tag_set_comment_ucs2() /
+# id3tag_set_fieldvalue_ucs2() - which lame.h no longer declares now that
+# DEPRECATED_OR_OBSOLETE_CODE_REMOVED is hardcoded to 1 - and passes a UCS-2 (unsigned short*)
+# string into the UTF-8 id3tag_set_textinfo_utf8()/id3tag_set_comment_utf8() calls. Both are
+# latent bugs in lame 4.0 itself; they only became fatal because this toolchain's C compiler
+# now rejects implicit function declarations and incompatible pointer arguments as hard errors
+# by default. We don't need the `lame` CLI binary (only the libmp3lame encoder library that
+# ffmpeg links against), so skip building it rather than patching lame's upstream source.
 RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://sourceforge.net/projects/lame/files/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz/download | tar -zx && \
     cd lame-${LAME_VERSION} && \
     LAME_ASM_FLAG="" && \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then LAME_ASM_FLAG="--enable-nasm"; fi && \
-    ./configure ${DEPS_CONFIGURE_OPTS} ${LAME_ASM_FLAG} | tee -a configure.log && \
+    ./configure ${DEPS_CONFIGURE_OPTS} --disable-decoder --disable-frontend ${LAME_ASM_FLAG} | tee -a configure.log && \
     make ${MAKEFLAGS} 2>&1 | tee -a make.log && make install 2>&1 | tee -a make.log
     # mp3lame doesn't have pkg-config .pc file
 
@@ -173,7 +187,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${OPUS_VERSION} --d
     pkg-config opus --modversion
 
 # vpx
-ARG VPX_VERSION=refs/tags/v1.16.0
+ARG VPX_VERSION=refs/tags/v1.17.0
 RUN cd ${BUILD_DIR} && set -o pipefail && git clone https://chromium.googlesource.com/webm/libvpx.git && \
     cd libvpx && git checkout ${VPX_VERSION} && \
     VPX_ASM_FLAG="" && \
@@ -185,7 +199,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone https://chromium.googlesourc
 # AV1 encoder (SvtAv1Enc, library name contains upper-case), requires ffmpeg >= 4.3.3
 # 
 # Currently we using this across all other AV1 encoders (ref: https://www.osumiakari.jp/articles/20231116-ffmpeg-svtav1/ )
-ARG SVTAV1D_VERSION=v3.1.2
+ARG SVTAV1D_VERSION=v4.2.0
 RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${SVTAV1D_VERSION} --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git && \
     cd SVT-AV1/Build && \
     cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="${PREFIX}" -DCMAKE_BUILD_TYPE=Release -DBUILD_DEC=OFF .. 2>&1 | tee -a configure.log && \
@@ -193,7 +207,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${SVTAV1D_VERSION} 
     pkg-config SvtAv1Enc --modversion
 
 # AV1 decoder (dav1d)
-ARG DAV1D_VERSION=1.5.3
+ARG DAV1D_VERSION=1.5.4
 RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${DAV1D_VERSION} --depth 1 https://code.videolan.org/videolan/dav1d.git && \
     mkdir dav1d/build && cd dav1d/build && \
     meson setup -Denable_tools=false -Denable_tests=false --default-library=static .. --prefix "${PREFIX}" | tee -a configure.log && \
@@ -211,7 +225,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${WEBP_VERSION} --d
 
 # libheif: provides the heif-enc / heif-dec command-line tools used to
 # encode and decode HEIC/HEIF files. ffmpeg in this image does NOT link
-# against libheif (8.0.1 doesn't expose --enable-libheif and reading HEIC
+# against libheif (9.0.1 doesn't expose --enable-libheif and reading HEIC
 # via the mov demuxer only surfaces the embedded preview JPEG, not the
 # full-resolution tile grid), so anything that needs a full-res HEIC →
 # JPEG conversion should call heif-dec directly.
@@ -221,7 +235,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && git clone --branch ${WEBP_VERSION} --d
 # Static build (BUILD_SHARED_LIBS=OFF): heif-enc statically links libheif so
 # we sidestep a known shared-build issue where the bundled binary mis-links
 # against an undefined sequence-API symbol on this image's toolchain.
-ARG LIBHEIF_VERSION=1.20.2
+ARG LIBHEIF_VERSION=1.23.2
 RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz | tar -zx && \
     cd libheif-${LIBHEIF_VERSION} && \
     mkdir build && cd build && \
@@ -233,7 +247,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/strukturag
 
 # ffmpeg, libav
 # http://ffmpeg.org/download.html
-ARG FFMPEG_VERSION=8.0.1
+ARG FFMPEG_VERSION=9.0.1
 # Make installed libraries visible before building ffmpeg/libav
 RUN ldconfig
 # pthread is required by libx265 : https://stackoverflow.com/a/62187983/914786
