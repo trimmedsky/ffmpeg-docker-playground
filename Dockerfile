@@ -11,31 +11,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV INITRD=No
 ENV LANG=en_US.UTF-8
 
-RUN echo 'force-unsafe-io' >> /etc/dpkg/dpkg.cfg.d/02apt-speedup && \
-    apt-get update && \
-    apt-get -y install curl && \
-    apt-get install -y --no-install-recommends apt-utils && \
-    apt-get -y install \
-      python3 \
-      git-core bash emacs-nox wget \
-      build-essential autoconf libtool pkg-config meson ninja-build cmake cmake-curses-gui gperf \
-      zlib1g-dev libbz2-dev liblzma-dev \
-      libpng-dev libjpeg-dev libtiff-dev libgif-dev librsvg2-dev \
-      libde265-dev \
-      libssl-dev \
-      libexpat1-dev \
-      uuid-dev \
-      file locales \
-    && \
-    locale-gen $(bash -c 'echo ${LANG%.*}') ${LANG} && \
-    apt-get clean && \
-    rm -r /var/lib/apt/lists/*
-
-# x86-only assemblers (yasm, nasm) - not needed on ARM
-RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-      apt-get update && apt-get -y install yasm nasm && \
-      apt-get clean && rm -r /var/lib/apt/lists/*; \
-    fi
+# Clang compiles CUDA filters to PTX without the CUDA Toolkit.
+# Only x86 builds need the yasm/nasm assemblers.
+RUN set -eu; \
+    assembler_packages=""; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      assembler_packages="yasm nasm"; \
+    fi; \
+    echo 'force-unsafe-io' >> /etc/dpkg/dpkg.cfg.d/02apt-speedup; \
+    apt-get update; \
+    apt-get install -y \
+      apt-utils bash curl emacs-nox git-core python3 wget \
+      autoconf build-essential clang cmake cmake-curses-gui gperf libtool meson ninja-build pkg-config \
+      libbz2-dev liblzma-dev zlib1g-dev \
+      libgif-dev libjpeg-dev libpng-dev librsvg2-dev libtiff-dev \
+      libde265-dev libexpat1-dev libssl-dev uuid-dev \
+      file locales ${assembler_packages}; \
+    locale-gen "${LANG%.*}" "${LANG}"; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 # Use bash because I want to use pipefail in this build.
 SHELL ["/bin/bash", "-c"]
@@ -254,10 +248,6 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/strukturag
 # NVIDIA codec API headers work on both x86_64 and aarch64. The CUDA/codec
 # driver libraries are loaded at runtime from the host via Container Toolkit;
 # building NVENC/NVDEC does not require a GPU or the CUDA toolkit.
-# Compile CUDA kernels to PTX with LLVM; no CUDA Toolkit or NPP dependency.
-RUN apt-get update && apt-get install -y --no-install-recommends clang && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
 # https://github.com/FFmpeg/nv-codec-headers/tree/n13.0.19.0
 ARG NV_CODEC_HEADERS_VERSION=n13.0.19.0
 RUN cd ${BUILD_DIR} && \
