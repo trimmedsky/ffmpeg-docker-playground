@@ -31,9 +31,10 @@ expected = dict(codec_name=codec, pix_fmt=pixel_format, width=int(width),
 for key, value in expected.items():
     assert stream[key] == value, (key, stream[key], value)
 PY
-  # Compare actual decoded pixels, not just metadata or an exit status.
+  # Compare by frame index: MP4 and Matroska use different timestamp precision,
+  # which otherwise makes framesync pair adjacent frames at 30 fps.
   ffmpeg -hide_banner -nostdin -i "$WORK_DIR/input.mp4" -i "$path" \
-    -lavfi "[0:v]format=${pix_fmt}[ref];[1:v]format=${pix_fmt}[out];[ref][out]psnr" \
+    -lavfi "[0:v]format=${pix_fmt},settb=AVTB,setpts=N/(30*TB)[ref];[1:v]format=${pix_fmt},settb=AVTB,setpts=N/(30*TB)[out];[ref][out]psnr" \
     -f null - > "$WORK_DIR/quality.log" 2>&1
   python3 - "$WORK_DIR/quality.log" <<'PY'
 import re
@@ -71,12 +72,12 @@ for codec in h264 hevc av1; do
   ffmpeg -hide_banner -nostdin -v verbose \
     -hwaccel cuda -hwaccel_output_format cuda -c:v "${codec}_cuvid" \
     -i "$WORK_DIR/transcode-$codec.mkv" -an -vf hwdownload,format=nv12 \
-    -f rawvideo "$WORK_DIR/decoded.yuv" > "$WORK_DIR/decode.log" 2>&1
+    -fps_mode passthrough -f rawvideo "$WORK_DIR/decoded.yuv" > "$WORK_DIR/decode.log" 2>&1
   test "$(stat -c %s "$WORK_DIR/decoded.yuv")" -eq "$((WIDTH * HEIGHT * 3 * FRAMES / 2))"
   # Also compare GPU-decoded pixels with a software decode of the same bitstream.
   ffmpeg -hide_banner -nostdin -f rawvideo -pixel_format nv12 -video_size "$SIZE" \
     -framerate 30 -i "$WORK_DIR/decoded.yuv" -i "$WORK_DIR/transcode-$codec.mkv" \
-    -lavfi '[0:v]format=yuv420p[gpu];[1:v]format=yuv420p[cpu];[gpu][cpu]psnr' \
+    -lavfi '[0:v]format=yuv420p,settb=AVTB,setpts=N/(30*TB)[gpu];[1:v]format=yuv420p,settb=AVTB,setpts=N/(30*TB)[cpu];[gpu][cpu]psnr' \
     -f null - > "$WORK_DIR/decode-quality.log" 2>&1
   python3 - "$WORK_DIR/decode-quality.log" <<'PY'
 import re
