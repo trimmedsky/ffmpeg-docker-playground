@@ -34,7 +34,9 @@ FFmpeg image and the agent. There is no Rust compiler in the final image.
 ## HTTP API v1
 
 `GET /healthz` is a public liveness check. Submit a job with
-`PUT /v1/jobs/encode-001` and an `application/json` body of at most 64 KiB.
+`PUT /v1/jobs/{id}` and an `application/json` body of at most 64 KiB.
+Replace `{id}` with a caller-generated ID unique to this execution attempt
+(for example, `encode-001`); `encode-001` below is only an example.
 When `FFMPEG_AGENT_TOKEN_FILE` is configured, include `Authorization: Bearer <token>`.
 The ID comes from the URL, not the JSON body:
 
