@@ -1,0 +1,30 @@
+[Unit]
+Description=Stateless FFmpeg HTTP worker
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ffmpeg-agent/agent.env
+ExecStartPre=/usr/bin/docker image inspect ${FFMPEG_AGENT_IMAGE}
+ExecStartPre=-/usr/bin/docker rm ffmpeg-agent
+ExecStart=/usr/bin/docker run --rm --init --name ffmpeg-agent --pull=never \
+  --gpus all --env NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  --user 1000:1000 --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --cpus 2 --memory 3g --memory-swap 3g --pids-limit 256 \
+  --publish 127.0.0.1:18080:8080 \
+  --mount type=bind,src=/var/lib/ffmpeg-agent,dst=/work \
+  --mount type=bind,src=/etc/ffmpeg-agent/token,dst=/run/secrets/agent-token,readonly \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  --env-file /etc/ffmpeg-agent/agent.env \
+  ${FFMPEG_AGENT_IMAGE} ffmpeg-agent
+ExecStop=/usr/bin/docker stop --time 45 ffmpeg-agent
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

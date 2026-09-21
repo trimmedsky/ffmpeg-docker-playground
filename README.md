@@ -47,6 +47,13 @@ CUDA-toolkit-dependent filters such as `scale_npp` and `scale_cuda` are not incl
 See [NVIDIA's FFmpeg guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html)
 for the decode and encode model.
 
+## Optional HTTP agent
+
+The image also installs `ffmpeg-agent`, a small Rust worker for bounded, stateless
+GET → FFmpeg → PUT jobs with progress and completion callbacks. It starts only
+when explicitly selected as the container command. See [agent/README.md](agent/README.md)
+for the API, configuration, license, tests and a systemd/Docker unit.
+
 ## Testing
 
 Three CPU suites run in CI on non-master branch pushes on native AMD64 and ARM64

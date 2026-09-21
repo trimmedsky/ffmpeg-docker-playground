@@ -1,3 +1,9 @@
+FROM rust:1.98.1-slim-bookworm AS agent-build
+WORKDIR /src/agent
+COPY agent/Cargo.toml agent/Cargo.lock ./
+COPY agent/src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --locked --release
+
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -281,6 +287,10 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://ffmpeg.org/releases/f
     make ${MAKEFLAGS} 2>&1 | tee -a make.log && make install 2>&1 | tee -a make.log
 RUN ldconfig   # Make ffmpeg libraries visible
 RUN ffmpeg -codecs
+
+# Installed as an opt-in command; the image's default command stays unchanged.
+COPY --from=agent-build /src/agent/target/release/ffmpeg-agent /usr/local/bin/ffmpeg-agent
+COPY agent/LICENSE-MIT agent/LICENSE-APACHE /usr/local/share/licenses/ffmpeg-agent/
 
 # Back to the default
 SHELL ["/bin/sh", "-c"]

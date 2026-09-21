@@ -66,6 +66,8 @@ echo "=== Executable Location Tests ==="
 
 run_test "ffmpeg is /usr/local/bin/ffmpeg" assert_command_path ffmpeg /usr/local/bin/ffmpeg
 run_test "ffprobe is /usr/local/bin/ffprobe" assert_command_path ffprobe /usr/local/bin/ffprobe
+run_test "ffmpeg-agent is /usr/local/bin/ffmpeg-agent" assert_command_path ffmpeg-agent /usr/local/bin/ffmpeg-agent
+run_test "ffmpeg-agent --version runs without service configuration" bash -c 'ffmpeg-agent --version | grep -q "^ffmpeg-agent "'
 
 # --- Build option tests ---
 
