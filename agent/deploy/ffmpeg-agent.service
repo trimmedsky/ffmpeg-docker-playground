@@ -1,6 +1,7 @@
 [Unit]
 Description=Stateless FFmpeg HTTP worker
 Requires=docker.service
+PartOf=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
