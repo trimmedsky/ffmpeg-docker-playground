@@ -245,6 +245,16 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://github.com/strukturag
     echo "${PREFIX}/lib" > /etc/ld.so.conf.d/local.conf && ldconfig && \
     heif-enc --version | head -1
 
+# NVIDIA codec API headers work on both x86_64 and aarch64. The CUDA/codec
+# driver libraries are loaded at runtime from the host via Container Toolkit;
+# building NVENC/NVDEC does not require a GPU or the CUDA toolkit.
+# https://github.com/FFmpeg/nv-codec-headers/tree/n13.0.19.0
+ARG NV_CODEC_HEADERS_VERSION=n13.0.19.0
+RUN cd ${BUILD_DIR} && \
+    git clone --branch ${NV_CODEC_HEADERS_VERSION} --depth 1 https://github.com/FFmpeg/nv-codec-headers.git && \
+    make -C nv-codec-headers PREFIX=${PREFIX} install && \
+    pkg-config ffnvcodec --modversion
+
 # ffmpeg, libav
 # http://ffmpeg.org/download.html
 ARG FFMPEG_VERSION=9.0.1
@@ -263,6 +273,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://ffmpeg.org/releases/f
       --enable-pthreads \
       --enable-autodetect --enable-swresample --enable-swscale --enable-filters \
       --enable-openssl \
+      --enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid \
       --enable-libwebp \
       --enable-libfreetype --enable-libharfbuzz --enable-libfontconfig --enable-libfribidi --enable-libass --enable-libx264 --enable-libx265  --enable-libvorbis --enable-libtheora --enable-libmp3lame --enable-libfdk-aac --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-libdav1d \
       | tee -a configure.log \

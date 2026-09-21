@@ -15,11 +15,44 @@ docker build . -t ffmpeg    # take a coffee break
 # Some examples are placed at sample-outputs/*/*.sh
 ```
 
+The same Dockerfile builds natively on Linux `amd64` and `arm64`, with the software
+codecs and NVIDIA NVENC/NVDEC enabled on both architectures. No GPU or CUDA toolkit
+is needed to build the image or use the software codecs.
+
+### NVIDIA hardware acceleration
+
+The host needs a supported NVIDIA GPU, a Linux NVIDIA driver **570 or newer**
+([nv-codec-headers 13.0.19 requirements](https://github.com/FFmpeg/nv-codec-headers/tree/n13.0.19.0)),
+and [NVIDIA Container Toolkit configured for Docker](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+Individual GPUs support different codecs; AV1 encoding requires newer hardware.
+NVENC does not provide a VP9 encoder; `libvpx-vp9` remains available on the CPU.
+
+Request both `compute` (CUDA) and `video` (codec driver libraries). The default
+Container Toolkit capabilities omit `video`; see the
+[driver capability documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html#driver-capabilities).
+
+```sh
+docker run --rm --gpus all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ffmpeg ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i input.mp4 \
+    -c:v h264_nvenc -preset p4 -cq 23 -c:a copy output.mp4
+```
+
+Use `hevc_nvenc` or `av1_nvenc` for those output codecs on supported GPUs. If the
+input cannot be decoded by NVDEC, omit the two `-hwaccel*` options to decode on the
+CPU and still encode with NVENC. GPU frames stay on the GPU in the command above;
+CPU filters need an explicit `hwdownload` / format conversion / upload path.
+CUDA-toolkit-dependent filters such as `scale_npp` and `scale_cuda` are not included.
+See [NVIDIA's FFmpeg guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html)
+for the decode and encode model.
+
 ## Testing
 
-Three suites, each answering a different question. All of them run in CI on every branch
-(`.github/workflows/test-build.yml`), and all of them can be run locally against an image
-you just built.
+Three CPU suites run in CI on non-master branch pushes on native AMD64 and ARM64
+runners (`.github/workflows/test-build.yml`). They require no GPU, including the
+checks for compiled NVIDIA support. A fourth, opt-in suite tests real GPU operation.
+All suites can be run locally against an image you just built.
 
 ### 1. Is the binary built the way it should be? (build tests)
 
@@ -59,6 +92,24 @@ point of this repository - the perceptual thresholds are floors far below a work
 encoder and far above a broken argument set. Test material is what is already in
 `test-media/` plus clips the script generates with ffmpeg itself into a temporary
 directory.
+
+### NVIDIA runtime tests (GPU required)
+
+```sh
+docker run --rm --gpus all --network none \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  --user "$(id -u):$(id -g)" -v "$PWD/tests:/tests:ro" \
+  ffmpeg bash /tests/run-nvidia-tests.sh
+```
+
+Requires a GPU supporting H.264, HEVC and AV1 encode/decode. Synthetic input is
+generated inside the disposable container. For each codec the suite tests CPU
+decode → NVENC, NVDEC → GPU frames → NVENC, and NVDEC → `hwdownload`. It checks the
+output codec, dimensions, pixel format, all 60 decoded frames and PSNR above 25 dB.
+GPU-decoded pixels must also agree with software decoding above 45 dB PSNR.
+Missing GPU support fails the suite; it does not skip tests or accept software
+fallback. Set `-e NVIDIA_TEST_SIZE=3840x2160` for a 4K run (default: 1280×720).
+Listing encoders alone is not evidence that the host can use them.
 
 ## Update libraries
 

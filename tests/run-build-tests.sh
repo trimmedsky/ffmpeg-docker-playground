@@ -83,6 +83,11 @@ BUILD_OPTIONS=(
   --enable-nonfree
   --enable-version3
   --enable-pthreads
+  --enable-ffnvcodec
+  --enable-cuda
+  --enable-nvenc
+  --enable-nvdec
+  --enable-cuvid
 )
 
 for option in "${BUILD_OPTIONS[@]}"; do
@@ -151,13 +156,17 @@ assert_decoder() {
   grep -qE "\(decoders:[^)]*$1[^)]*\)" <<<"$CODECS_OUTPUT"
 }
 
-for encoder in libx264 libx264rgb libx265 libfdk_aac libmp3lame libopus libvorbis; do
+for encoder in libx264 libx264rgb libx265 libfdk_aac libmp3lame libopus libvorbis h264_nvenc hevc_nvenc av1_nvenc; do
   run_test "encoder \"$encoder\" listed" assert_encoder "$encoder"
 done
 
-for decoder in h264 hevc aac aac_fixed mp3 opus vorbis; do
+for decoder in h264 hevc aac aac_fixed mp3 opus vorbis h264_cuvid hevc_cuvid av1_cuvid; do
   run_test "decoder \"$decoder\" listed" assert_decoder "$decoder"
 done
+
+# Listing compiled support must work without a GPU or host driver libraries.
+HWACCELS_OUTPUT=$(ffmpeg -hwaccels 2>/dev/null)
+run_test "CUDA hardware acceleration listed" grep -qx cuda <<<"$HWACCELS_OUTPUT"
 
 # --- pkg-config tests ---
 
@@ -175,7 +184,7 @@ echo ""
 echo "=== Linked Libraries Tests ==="
 
 for lib in freetype2 harfbuzz fribidi fontconfig libass x264 x265 ogg vorbis theora \
-  fdk-aac opus vpx SvtAv1Enc dav1d libwebp libheif; do
+  fdk-aac opus vpx SvtAv1Enc dav1d libwebp libheif ffnvcodec; do
   run_test "pkg-config $lib" assert_pkg_config "$lib"
 done
 
