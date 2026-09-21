@@ -87,6 +87,7 @@ BUILD_OPTIONS=(
   --enable-pthreads
   --enable-ffnvcodec
   --enable-cuda
+  --enable-cuda-llvm
   --enable-nvenc
   --enable-nvdec
   --enable-cuvid
@@ -193,6 +194,8 @@ done
 run_test "ffmpeg -version lists libav*" assert_ffmpeg_version_lists_libav
 run_test "heif-enc --version runs" bash -c 'heif-enc --version >/dev/null 2>&1'
 run_test "heif-dec --version runs" bash -c 'heif-dec --version >/dev/null 2>&1'
+
+run_test "CUDA scaling filter available" bash -c "ffmpeg -hide_banner -filters 2>/dev/null | grep -q scale_cuda"
 
 # --- Summary ---
 

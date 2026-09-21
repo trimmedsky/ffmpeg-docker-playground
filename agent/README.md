@@ -1,8 +1,8 @@
 # ffmpeg-agent
 
-A small, stateless Rust HTTP worker. It downloads one input with GET, executes
-FFmpeg without a shell, uploads one output with PUT, and reports progress and the
-result with PUT callbacks. It does not interpret URLs, storage response bodies,
+A small, stateless Rust HTTP worker. It downloads one input, executes FFmpeg without a shell, uploads one output,
+and reports progress and the result through HTTP callbacks. The default HTTP
+methods are GET for input and PUT for output and callbacks. It does not interpret URLs, storage response bodies,
 media-library identifiers or application-specific signatures.
 
 The Docker image installs `ffmpeg-agent` alongside `ffmpeg` and `ffprobe`.
@@ -33,19 +33,22 @@ FFmpeg image and the agent. There is no Rust compiler in the final image.
 
 ## HTTP API v1
 
-`GET /healthz` is a public liveness check. `POST /v1/jobs` requires
-`Authorization: Bearer <token>` and an `application/json` body of at most 64 KiB:
+`GET /healthz` is a public liveness check. Submit a job with
+`PUT /v1/jobs/encode-001` and an `application/json` body of at most 64 KiB.
+When `FFMPEG_AGENT_TOKEN_FILE` is configured, include `Authorization: Bearer <token>`.
+The ID comes from the URL, not the JSON body:
 
 ```json
 {
-  "id": "encode-001",
   "input": {
     "url": "https://media.example.org/input.mp4",
     "headers": {"Authorization": "Bearer input-access-token"}
   },
   "output": {
     "url": "https://storage.example.org/output.mp4?signature=example",
-    "headers": {"Content-Type": "video/mp4"}
+    "headers": {"Content-Type": "video/mp4"},
+    "method": "PUT",
+    "retry": {"max_attempts": 3, "delay_ms": 1000}
   },
   "callback": {
     "url": "https://jobs.example.org/callback",
@@ -60,7 +63,23 @@ FFmpeg image and the agent. There is no Rust compiler in the final image.
 }
 ```
 
-`headers` is optional on every endpoint. Only HTTP/HTTPS URLs are accepted;
+`headers`, `method` and `retry` are optional on each of `input`, `output` and
+`callback`. Supported methods are GET, POST, PUT, PATCH, DELETE, HEAD and OPTIONS.
+Input requests have no body; output requests carry the output file; callbacks
+carry JSON. A method override does not change those body semantics.
+
+`retry.max_attempts` includes the first request (1–10); `retry.delay_ms` is a fixed
+wait between attempts (0–60000, default 1000). Input and output default to one
+attempt. Callback defaults are one attempt per heartbeat and three per terminal
+event; an explicit callback retry policy applies to both. Network failures and
+HTTP 408, 429 and 5xx are retryable; other non-2xx statuses fail immediately.
+Retries restart the whole download or reopen the complete output file. They do
+not rerun FFmpeg. Set retries only when the destination tolerates replay: a lost
+response can mean that an upload or callback was already accepted, particularly
+with POST. The same callback sequence and body are reused on each retry.
+Transfer retries and their delays remain subject to the job's stall/deadline limits.
+
+Only HTTP/HTTPS URLs are accepted;
 redirects are rejected so credentials are not forwarded to another destination.
 TLS certificates are verified. Transport headers (`Host`, `Content-Length`,
 `Transfer-Encoding`, `Connection`, `Upgrade`) are managed by the agent.
@@ -69,7 +88,9 @@ Arguments are separate process arguments, never shell text. Exactly one `-i`
 must precede the standalone `{input}` placeholder. The standalone `{output}`
 placeholder must occur once, at the end. Both expand to files in a unique job
 directory. The extension selects the output muxer unless `-f` is specified.
-FFmpeg gets `-nostdin -hide_banner -y`; the agent adds `-fs` for its output limit.
+FFmpeg gets `-nostdin -hide_banner -nostats -progress pipe:1 -stats_period 1 -y`;
+the agent captures stdout for progress and adds `-fs` for its output limit.
+Do not override these progress options or direct media output to stdout.
 Software codecs work too: omit the CUDA input options and select `libx264`, etc.
 
 Responses:
@@ -77,7 +98,7 @@ Responses:
 | Status | Meaning |
 |---|---|
 | `202` | Accepted; body is `{"id":"encode-001"}` |
-| `401` | Missing or incorrect bearer token |
+| `401` | Missing or incorrect bearer token when authentication is configured |
 | `400` / `413` / `415` / `422` | Invalid job, oversized body, wrong content type or malformed JSON |
 | `409` | That ID is already queued, running or finishing its callback |
 | `429` | All execution and waiting slots are occupied; `Retry-After: 10` |
@@ -97,7 +118,7 @@ execution. `sequence` increases for each event within an attempt. States are
 Only the last two are terminal. A heartbeat looks like:
 
 ```json
-{"version":1,"id":"encode-001","sequence":0,"state":"queued","terminal":false,"ffmpeg_log_truncated":false}
+{"version":1,"id":"encode-001","sequence":0,"state":"queued","terminal":false}
 ```
 
 Terminal events additionally contain `result` and `ffmpeg_log`:
@@ -119,8 +140,7 @@ Terminal events additionally contain `result` and `ffmpeg_log`:
       "body_truncated": false
     }
   },
-  "ffmpeg_log": "...",
-  "ffmpeg_log_truncated": false
+  "ffmpeg_log": "..."
 }
 ```
 
@@ -129,11 +149,16 @@ duplicates) and up to 64 KiB of raw response body. Header values and body use
 base64, so binary responses remain intact; the agent does not parse them.
 Non-2xx upload responses fail the job and are reported with their receipt.
 `upload_response` or `ffmpeg_exit_code` can be null when that stage was not reached.
-FFmpeg's stderr tail is capped at 64 KiB, with explicit truncation flags.
+`ffmpeg_log` contains the first 64 KiB of FFmpeg stderr (or the entire log if
+smaller). When stderr exceeds that limit, `ffmpeg_log_tail` is also sent and
+contains up to the last 64 KiB after the retained prefix. Thus a long log retains
+both setup details and the final error; the middle may be omitted. The tail
+field's presence indicates overflow; there is no truncation boolean for logs.
+Both fields decode invalid UTF-8 with replacement characters.
 
-The callback must acknowledge with 2xx. Heartbeats get one attempt; terminal
-events get at most three attempts, five seconds each, one second apart. Retries
-reuse the **same sequence and body**. There are no durable delivery guarantees.
+The callback must acknowledge with 2xx. Each callback attempt has a five-second
+timeout. Retry counts and delays follow the endpoint policy described above.
+Retries reuse the **same sequence and body**. There are no durable delivery guarantees.
 The caller should time out a lost job after missed heartbeats (for example three
 intervals), handle duplicate events, and ignore any late heartbeat after a
 terminal event. Callbacks and their acknowledgements are part of the trust boundary.
@@ -142,16 +167,33 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 | Environment variable | Default / meaning |
 |---|---|
-| `FFMPEG_AGENT_TOKEN_FILE` | Required; file containing a random 32+ character bearer token |
+| `FFMPEG_AGENT_TOKEN_FILE` | Optional; unset/empty disables bearer authentication; otherwise a file with 32–1024 printable ASCII token characters |
 | `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`; use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
 | `FFMPEG_AGENT_CONCURRENCY` | `1`, range 1–16 |
 | `FFMPEG_AGENT_QUEUE_CAPACITY` | `1` waiting slot, range 1–64 |
 | `FFMPEG_AGENT_HEARTBEAT_SECS` | `10`, range 1–300 |
-| `FFMPEG_AGENT_JOB_TIMEOUT_SECS` | `3600` after execution starts, including download and upload |
+| `FFMPEG_AGENT_STALL_TIMEOUT_SECS` | `120`, range 1–3600; maximum time without progress after execution starts |
+| `FFMPEG_AGENT_JOB_TIMEOUT_SECS` | `0` (disabled), range 0–86400; optional absolute execution deadline including transfers |
 | `FFMPEG_AGENT_MAX_INPUT_BYTES` | `17179869184` (16 GiB) |
 | `FFMPEG_AGENT_MAX_OUTPUT_BYTES` | `17179869184` (16 GiB); outputs reaching the limit are rejected |
+
+Authentication may be provided by an SSH tunnel or an authenticated gateway.
+If a token file is configured but unreadable or invalid, startup fails; it never
+silently disables authentication. The supplied systemd example enables a token.
+For transport-only authentication, remove its token bind mount and unset
+`FFMPEG_AGENT_TOKEN_FILE`; token-file creation below can then be omitted.
+
+The stall timer resets on transferred media/response bytes, increasing FFmpeg
+`frame`/`out_time_us`/`total_size` counters, or growth of any regular file under
+the job directory (including nested temporary files). File checks run every
+250 ms, skip symlinks and examine at most 4096 entries per scan. Queue waiting,
+heartbeat delivery, repeated identical counters and stderr text are not progress.
+Upload progress reflects bytes consumed by the HTTP transport, not acknowledgement
+of remote storage. A stalled upload response is still timed out after the last
+progress. Tune the threshold for initial analysis and muxer finalization; the
+optional absolute deadline can bound jobs that continue to make progress.
 
 Media is streamed, not buffered whole in RAM. Provision scratch disk for both
 input and output of every concurrent job. Container memory/CPU limits apply to

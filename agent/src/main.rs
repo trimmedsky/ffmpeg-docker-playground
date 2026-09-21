@@ -4,11 +4,11 @@ mod model;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, put},
 };
 use engine::{Accepted, Active, Progress};
 use serde_json::json;
@@ -26,7 +26,12 @@ async fn authenticate(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .unwrap_or("");
-    if !bool::from(token.as_bytes().ct_eq(&state.config.token)) {
+    if state
+        .config
+        .token
+        .as_ref()
+        .is_some_and(|expected| !bool::from(token.as_bytes().ct_eq(expected)))
+    {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"unauthorized"})),
@@ -36,7 +41,12 @@ async fn authenticate(
     next.run(request).await
 }
 
-async fn submit(State(state): State<Arc<engine::State>>, Json(job): Json<model::Job>) -> Response {
+async fn submit(
+    State(state): State<Arc<engine::State>>,
+    Path(id): Path<String>,
+    Json(mut job): Json<model::Job>,
+) -> Response {
+    job.id = id;
     if let Err(message) = job.validate() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response();
     }
@@ -67,6 +77,7 @@ async fn submit(State(state): State<Arc<engine::State>>, Json(job): Json<model::
             ..Default::default()
         }),
         sequence: AtomicU64::new(0),
+        last_progress: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
     });
     let id = active.job.id.clone();
     let heartbeat = engine::heartbeat(state.clone(), active.clone());
@@ -93,7 +104,7 @@ async fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. FFMPEG_AGENT_TOKEN_FILE is required.\nSee agent/README.md for the API, limits and deployment."
+                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. FFMPEG_AGENT_TOKEN_FILE optionally enables bearer authentication.\nSee agent/README.md for the API, limits and deployment."
             );
             return;
         }
@@ -135,8 +146,8 @@ async fn run() -> Result<(), String> {
             get(|| async { Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")})) }),
         )
         .route(
-            "/v1/jobs",
-            post(submit).route_layer(middleware::from_fn_with_state(state.clone(), authenticate)),
+            "/v1/jobs/{id}",
+            put(submit).route_layer(middleware::from_fn_with_state(state.clone(), authenticate)),
         )
         .layer(DefaultBodyLimit::max(65536))
         .with_state(state.clone());

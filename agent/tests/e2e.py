@@ -13,10 +13,10 @@ import urllib.request
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--url", default="http://127.0.0.1:8080")
-parser.add_argument("--token-file", required=True)
+parser.add_argument("--token-file")
 parser.add_argument("--gpu", action="store_true")
 args = parser.parse_args()
-token = Path(args.token_file).read_text().strip()
+token = Path(args.token_file).read_text().strip() if args.token_file else None
 receipt = b'{"fixture":"uploaded"}\n'
 events = []
 lock = threading.Lock()
@@ -77,14 +77,14 @@ with tempfile.TemporaryDirectory() as tmp:
             ffmpeg_args = (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if args.gpu else [])
             ffmpeg_args += ["-i", "{input}", "-c:v", encoder]
             if args.gpu:
-                ffmpeg_args += ["-pix_fmt", "cuda", "-preset", "p4", "-cq", "23"]
+                ffmpeg_args += ["-vf", "scale_cuda=640:360", "-pix_fmt", "cuda", "-preset", "p4", "-cq", "23"]
             ffmpeg_args += ["-c:a", "copy", "{output}"]
-            spec = {"id": job_id, "input": {"url": base + "/input", "headers": {"X-Source-Token": "fixture-source"}},
+            spec = {"input": {"url": base + "/input", "headers": {"X-Source-Token": "fixture-source"}},
                     "output": {"url": base + "/" + codec, "headers": {"X-Upload-Token": "fixture-output", "Content-Type": "video/mp4"}},
                     "callback": {"url": base + "/callback", "headers": {"X-Callback-Token": "fixture-callback"}},
                     "args": ffmpeg_args, "output_extension": "mp4"}
-            req = urllib.request.Request(args.url + "/v1/jobs", data=json.dumps(spec).encode(),
-                                         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+            req = urllib.request.Request(args.url + "/v1/jobs/" + job_id, method="PUT", data=json.dumps(spec).encode(),
+                                         headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + token} if token else {})})
             with urllib.request.urlopen(req, timeout=10) as response:
                 assert response.status == 202
             deadline = time.monotonic() + 90
@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
             probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-count_frames", "-show_streams", "-of", "json", str(root / (codec + ".mp4"))]))
             video = next(s for s in probe["streams"] if s["codec_type"] == "video")
             audio = next(s for s in probe["streams"] if s["codec_type"] == "audio")
-            assert (video["codec_name"], video["width"], video["height"], video["nb_read_frames"]) == (codec, 1280, 720, "30")
+            assert (video["codec_name"], video["width"], video["height"], video["nb_read_frames"]) == (codec, 640 if args.gpu else 1280, 360 if args.gpu else 720, "30")
             assert audio["codec_name"] == "aac"
             print(f"PASS: GET -> {encoder} -> PUT -> callback; 30 frames, AAC, opaque upload receipt preserved", flush=True)
     finally:

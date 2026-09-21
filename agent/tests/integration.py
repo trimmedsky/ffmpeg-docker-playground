@@ -23,6 +23,7 @@ RECEIPT = b'{"stored":"fixture"}\n'
 EVENTS = []
 UPLOADS = []
 RETRIES = {}
+REQUESTS = {}
 LOCK = threading.Lock()
 
 
@@ -36,7 +37,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def transient(self):
+        with LOCK:
+            key = (self.command, self.path)
+            REQUESTS[key] = REQUESTS.get(key, 0) + 1
+            return REQUESTS[key] < 3
+
+    def do_POST(self):
+        if self.path.startswith("/input"):
+            return self.do_GET()
+        return self.do_PUT()
+
+    def do_PATCH(self):
+        return self.do_PUT()
+
     def do_GET(self):
+        if self.path == "/input-retry" and self.transient():
+            return self.reply(503)
         if self.path == "/missing":
             return self.reply(404)
         if self.headers.get("X-Input-Token") != "fixture-input":
@@ -59,6 +76,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     RETRIES[event["id"]] = n + 1
             return self.reply(503 if self.path == "/callback-retry" and event["terminal"] and n < 2 else 204)
         if self.headers.get("X-Upload-Token") != "fixture-output":
+            return self.reply(403)
+        if self.path == "/output-retry" and self.transient():
+            assert body == PAYLOAD, "retry did not reopen complete output"
+            return self.reply(503)
+        if self.path == "/output-no-retry":
+            self.transient()
             return self.reply(403)
         with LOCK:
             UPLOADS.append((self.path, body))
@@ -95,7 +118,7 @@ def request(url, data=None, token=None):
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
-    req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None, headers=headers)
+    req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None, headers=headers, method="PUT" if data is not None else "GET")
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
             return response.status, response.read()
@@ -124,6 +147,17 @@ mode = sys.argv[sys.argv.index("--mode") + 1]
 print("fixture pid=" + str(os.getpid()), file=sys.stderr, flush=True)
 if mode == "slow": time.sleep(2)
 if mode == "timeout": time.sleep(30)
+if mode in ("growth", "progress", "no-progress"):
+    for n in range(10):
+        if mode == "growth":
+            path = pathlib.Path("nested")
+            path.mkdir(exist_ok=True)
+            with (path / "temporary-data").open("ab") as file: file.write(b"x")
+        if mode == "progress": print("frame=" + str(n + 1), flush=True)
+        if mode == "no-progress":
+            print("frame=0", flush=True)
+            print("still waiting", file=sys.stderr, flush=True)
+        time.sleep(0.3)
 if mode == "fail":
     print("fixture encode error", file=sys.stderr)
     sys.exit(7)
@@ -139,6 +173,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                    FFMPEG_AGENT_WORK_DIR=str(root / "work"), FFMPEG_AGENT_FFMPEG=str(fake),
                    FFMPEG_AGENT_HEARTBEAT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="10")
         env.update(overrides)
+        env = {key: value for key, value in env.items() if value is not None}
         abandoned = root / "work" / "job-abandoned"
         abandoned.mkdir(parents=True)
         (abandoned / "partial").write_bytes(b"abandoned fixture")
@@ -171,7 +206,9 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
 
 
 def submit(url, token, spec, status=202):
-    actual, body = request(url + "/v1/jobs", spec, token)
+    spec = dict(spec)
+    name = spec.pop("id")
+    actual, body = request(url + "/v1/jobs/" + name, spec, token)
     assert actual == status, (actual, body)
 
 
@@ -181,7 +218,7 @@ def terminal(name):
 
 with agent() as (_, url, token, root):
     submit(url, None, job("unauthorized"), 401)
-    malformed = urllib.request.Request(url + "/v1/jobs", data=b"not-json", headers={"Content-Type": "application/json"})
+    malformed = urllib.request.Request(url + "/v1/jobs/invalid", method="PUT", data=b"not-json", headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(malformed, timeout=3)
         raise AssertionError("unauthenticated request accepted")
@@ -221,7 +258,8 @@ with agent() as (_, url, token, root):
     assert terminal("bad-upload")["result"]["upload_response"]["status"] == 500
     submit(url, token, job("bounded-log", "log"))
     log = terminal("bounded-log")
-    assert log["ffmpeg_log_truncated"] and len(log["ffmpeg_log"].encode()) <= 65536 and "LOG-END" in log["ffmpeg_log"]
+    assert len(log["ffmpeg_log"].encode()) == 65536 and len(log["ffmpeg_log_tail"].encode()) <= 65536 and "LOG-END" in log["ffmpeg_log_tail"]
+    assert "ffmpeg_log_tail" not in first and "ffmpeg_log_truncated" not in log
     oversized_receipt = job("large-receipt")
     oversized_receipt["output"]["url"] = BASE + "/upload-large-receipt"
     submit(url, token, oversized_receipt)
@@ -269,4 +307,60 @@ with agent() as (process, url, token, root):
     assert terminal("shutdown-active")["result"]["error"] == "agent shutting down"
     assert terminal("shutdown-queued")["result"]["error"] == "agent shutting down"
 print("PASS: graceful shutdown reports both active and queued jobs")
+with agent() as (_, url, token, root):
+    spec = job("methods-and-retries")
+    spec["input"].update(url=BASE + "/input-retry", method="POST", retry={"max_attempts": 3, "delay_ms": 10})
+    spec["output"].update(url=BASE + "/output-retry", method="PATCH", retry={"max_attempts": 3, "delay_ms": 10})
+    spec["callback"].update(url=BASE + "/callback-retry", method="POST", retry={"max_attempts": 3, "delay_ms": 10})
+    submit(url, token, spec)
+    wait_for(lambda: len(events(spec["id"], True)) == 3)
+    assert terminal(spec["id"])["state"] == "succeeded"
+    assert REQUESTS[("POST", "/input-retry")] == REQUESTS[("PATCH", "/output-retry")] == 3
+    spec = job("non-retryable")
+    spec["output"].update(url=BASE + "/output-no-retry", retry={"max_attempts": 3, "delay_ms": 0})
+    submit(url, token, spec)
+    assert terminal(spec["id"])["state"] == "failed"
+    assert REQUESTS[("PUT", "/output-no-retry")] == 1
+    for field in ("input", "output", "callback"):
+        spec = job("invalid-retry-" + field)
+        spec[field]["retry"] = {"max_attempts": 0}
+        submit(url, token, spec, 400)
+        spec[field].pop("retry")
+        spec[field]["method"] = "CONNECT"
+        submit(url, token, spec, 400)
+print("PASS: per-endpoint HTTP methods, bounded retries, output replay and permanent failures")
+
+for setting in (None, ""):
+    with agent(FFMPEG_AGENT_TOKEN_FILE=setting) as (_, url, token, root):
+        name = "no-auth-" + str(setting)
+        submit(url, None, job(name))
+        assert terminal(name)["state"] == "succeeded"
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "token"
+    env = dict(os.environ, FFMPEG_AGENT_TOKEN_FILE=str(path))
+    for content in (None, "", "short"):
+        if content is not None: path.write_text(content)
+        result = subprocess.run([BINARY], env=env, capture_output=True, timeout=5)
+        assert result.returncode == 1
+print("PASS: optional bearer authentication and fail-closed configured token files")
+
+with agent(FFMPEG_AGENT_STALL_TIMEOUT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="0") as (_, url, token, root):
+    for mode in ("growth", "progress", "timeout", "no-progress"):
+        name = "stall-" + mode
+        submit(url, token, job(name, mode))
+        result = terminal(name)
+        if mode in ("growth", "progress"):
+            assert result["state"] == "succeeded", result
+        else:
+            assert result["result"]["error"] == "job progress stalled", result
+            pid = int(result["ffmpeg_log"].split("pid=")[1].split()[0])
+            def dead():
+                try: os.kill(pid, 0); return False
+                except ProcessLookupError: return True
+            wait_for(dead)
+    submit(url, token, job("long-active", "growth"))
+    submit(url, token, job("long-queued", "progress"))
+    assert terminal("long-active")["state"] == "succeeded"
+    assert terminal("long-queued")["state"] == "succeeded"
+print("PASS: nested file growth, encoder progress, stall detection, queued time excluded and child cleanup")
 SERVER.shutdown()

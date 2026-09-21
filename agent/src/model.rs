@@ -12,6 +12,29 @@ pub struct Endpoint {
     pub url: String,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    pub method: Option<String>,
+    pub retry: Option<Retry>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retry {
+    pub max_attempts: u32,
+    #[serde(default = "retry_delay")]
+    pub delay_ms: u64,
+}
+
+fn retry_delay() -> u64 {
+    1000
+}
+
+impl Retry {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !(1..=10).contains(&self.max_attempts) || self.delay_ms > 60000 {
+            return Err("retry max_attempts must be 1..10 and delay_ms 0..60000");
+        }
+        Ok(())
+    }
 }
 
 impl Endpoint {
@@ -26,6 +49,19 @@ impl Endpoint {
             return Err("URLs must use HTTP(S), without userinfo or fragments");
         }
         self.header_map()?;
+        if let Some(method) = &self.method {
+            let method = reqwest::Method::from_bytes(method.as_bytes())
+                .map_err(|_| "invalid HTTP method")?;
+            if !matches!(
+                method.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+            ) {
+                return Err("unsupported HTTP method");
+            }
+        }
+        if let Some(retry) = &self.retry {
+            retry.validate()?;
+        }
         Ok(())
     }
 
@@ -50,6 +86,7 @@ impl Endpoint {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Job {
+    #[serde(skip)]
     pub id: String,
     pub input: Endpoint,
     pub output: Endpoint,
@@ -142,5 +179,6 @@ pub struct Event<'a> {
     pub result: Option<&'a Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ffmpeg_log: Option<String>,
-    pub ffmpeg_log_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ffmpeg_log_tail: Option<String>,
 }

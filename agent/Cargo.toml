@@ -10,6 +10,7 @@ repository = "https://github.com/trimmedsky/ffmpeg-docker-playground"
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

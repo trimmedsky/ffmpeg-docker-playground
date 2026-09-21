@@ -43,7 +43,11 @@ Use `hevc_nvenc` or `av1_nvenc` for those output codecs on supported GPUs. If th
 input cannot be decoded by NVDEC, omit the two `-hwaccel*` options to decode on the
 CPU and still encode with NVENC. GPU frames stay on the GPU in the command above;
 CPU filters need an explicit `hwdownload` / format conversion / upload path.
-CUDA-toolkit-dependent filters such as `scale_npp` and `scale_cuda` are not included.
+CUDA filters including `scale_cuda` are built with Clang (`--enable-cuda-llvm`),
+without the CUDA Toolkit. For example, add `-vf scale_cuda=1280:720` before
+`-c:v` above to resize GPU frames. `scale_cuda` supports resizing and compatible pixel format conversions;
+it does not convert between YUV and RGB (see the
+[FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html#scale_005fcuda)).
 See [NVIDIA's FFmpeg guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html)
 for the decode and encode model.
 
