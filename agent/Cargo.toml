@@ -1,0 +1,27 @@
+[package]
+name = "ffmpeg-agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "A small, stateless HTTP worker for FFmpeg jobs"
+repository = "https://github.com/trimmedsky/ffmpeg-docker-playground"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros", "net", "fs", "io-util", "process", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

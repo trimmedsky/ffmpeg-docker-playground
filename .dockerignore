@@ -3,3 +3,6 @@
 
 test-media
 tests
+
+agent/target
+agent/tests/__pycache__

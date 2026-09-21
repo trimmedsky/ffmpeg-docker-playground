@@ -1,3 +1,9 @@
+FROM rust:1.98.1-slim-bookworm AS agent-build
+WORKDIR /src/agent
+COPY agent/Cargo.toml agent/Cargo.lock ./
+COPY agent/src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --locked --release
+
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -5,31 +11,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV INITRD=No
 ENV LANG=en_US.UTF-8
 
-RUN echo 'force-unsafe-io' >> /etc/dpkg/dpkg.cfg.d/02apt-speedup && \
-    apt-get update && \
-    apt-get -y install curl && \
-    apt-get install -y --no-install-recommends apt-utils && \
-    apt-get -y install \
-      python3 \
-      git-core bash emacs-nox wget \
-      build-essential autoconf libtool pkg-config meson ninja-build cmake cmake-curses-gui gperf \
-      zlib1g-dev libbz2-dev liblzma-dev \
-      libpng-dev libjpeg-dev libtiff-dev libgif-dev librsvg2-dev \
-      libde265-dev \
-      libssl-dev \
-      libexpat1-dev \
-      uuid-dev \
-      file locales \
-    && \
-    locale-gen $(bash -c 'echo ${LANG%.*}') ${LANG} && \
-    apt-get clean && \
-    rm -r /var/lib/apt/lists/*
-
-# x86-only assemblers (yasm, nasm) - not needed on ARM
-RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-      apt-get update && apt-get -y install yasm nasm && \
-      apt-get clean && rm -r /var/lib/apt/lists/*; \
-    fi
+# Clang compiles CUDA filters to PTX without the CUDA Toolkit.
+# Only x86 builds need the yasm/nasm assemblers.
+RUN set -eu; \
+    assembler_packages=""; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      assembler_packages="yasm nasm"; \
+    fi; \
+    echo 'force-unsafe-io' >> /etc/dpkg/dpkg.cfg.d/02apt-speedup; \
+    apt-get update; \
+    apt-get install -y \
+      apt-utils bash curl emacs-nox git-core python3 wget \
+      autoconf build-essential clang cmake cmake-curses-gui gperf libtool meson ninja-build pkg-config \
+      libbz2-dev liblzma-dev zlib1g-dev \
+      libgif-dev libjpeg-dev libpng-dev librsvg2-dev libtiff-dev \
+      libde265-dev libexpat1-dev libssl-dev uuid-dev \
+      file locales ${assembler_packages}; \
+    locale-gen "${LANG%.*}" "${LANG}"; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 # Use bash because I want to use pipefail in this build.
 SHELL ["/bin/bash", "-c"]
@@ -273,7 +273,7 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://ffmpeg.org/releases/f
       --enable-pthreads \
       --enable-autodetect --enable-swresample --enable-swscale --enable-filters \
       --enable-openssl \
-      --enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid \
+      --enable-ffnvcodec --enable-cuda --enable-cuda-llvm --enable-nvenc --enable-nvdec --enable-cuvid \
       --enable-libwebp \
       --enable-libfreetype --enable-libharfbuzz --enable-libfontconfig --enable-libfribidi --enable-libass --enable-libx264 --enable-libx265  --enable-libvorbis --enable-libtheora --enable-libmp3lame --enable-libfdk-aac --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-libdav1d \
       | tee -a configure.log \
@@ -281,6 +281,10 @@ RUN cd ${BUILD_DIR} && set -o pipefail && curl -sL https://ffmpeg.org/releases/f
     make ${MAKEFLAGS} 2>&1 | tee -a make.log && make install 2>&1 | tee -a make.log
 RUN ldconfig   # Make ffmpeg libraries visible
 RUN ffmpeg -codecs
+
+# Installed as an opt-in command; the image's default command stays unchanged.
+COPY --from=agent-build /src/agent/target/release/ffmpeg-agent /usr/local/bin/ffmpeg-agent
+COPY agent/LICENSE-MIT agent/LICENSE-APACHE /usr/local/share/licenses/ffmpeg-agent/
 
 # Back to the default
 SHELL ["/bin/sh", "-c"]

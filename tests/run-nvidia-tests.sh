@@ -15,11 +15,11 @@ HEIGHT=${SIZE#*x}
 FRAMES=60
 
 check_output() {
-  local path=$1 codec=$2 pix_fmt=$3
+  local path=$1 codec=$2 pix_fmt=$3 width=${4:-$WIDTH} height=${5:-$HEIGHT} reference=${6:-$WORK_DIR/input.mp4}
   ffprobe -v error -select_streams v:0 -count_frames \
     -show_entries stream=codec_name,width,height,pix_fmt,nb_read_frames \
     -of json "$path" > "$WORK_DIR/probe.json"
-  python3 - "$WORK_DIR/probe.json" "$codec" "$pix_fmt" "$WIDTH" "$HEIGHT" "$FRAMES" <<'PY'
+  python3 - "$WORK_DIR/probe.json" "$codec" "$pix_fmt" "$width" "$height" "$FRAMES" <<'PY'
 import json
 import sys
 path, codec, pixel_format, width, height, frames = sys.argv[1:]
@@ -33,7 +33,7 @@ for key, value in expected.items():
 PY
   # Compare by frame index: MP4 and Matroska use different timestamp precision,
   # which otherwise makes framesync pair adjacent frames at 30 fps.
-  ffmpeg -hide_banner -nostdin -i "$WORK_DIR/input.mp4" -i "$path" \
+  ffmpeg -hide_banner -nostdin -i "$reference" -i "$path" \
     -lavfi "[0:v]format=${pix_fmt},settb=AVTB,setpts=N/(30*TB)[ref];[1:v]format=${pix_fmt},settb=AVTB,setpts=N/(30*TB)[out];[ref][out]psnr" \
     -f null - > "$WORK_DIR/quality.log" 2>&1
   python3 - "$WORK_DIR/quality.log" <<'PY'
@@ -52,6 +52,9 @@ ffmpeg -hide_banner -nostdin -v error -f lavfi \
   -i "testsrc2=size=$SIZE:rate=30" -frames:v "$FRAMES" \
   -c:v libx264 -preset fast -crf 18 -profile:v high -pix_fmt yuv420p "$WORK_DIR/input.mp4"
 
+ffmpeg -hide_banner -nostdin -v error -i "$WORK_DIR/input.mp4" \
+  -vf scale=640:360:flags=bilinear -c:v ffv1 "$WORK_DIR/scaled-reference.mkv"
+
 for codec in h264 hevc av1; do
   echo "TEST: software decode -> ${codec}_nvenc"
   ffmpeg -hide_banner -nostdin -v verbose -i "$WORK_DIR/input.mp4" \
@@ -66,6 +69,14 @@ for codec in h264 hevc av1; do
     -c:v "${codec}_nvenc" -preset p4 -rc constqp -qp 20 \
     "$WORK_DIR/transcode-$codec.mkv" > "$WORK_DIR/transcode.log" 2>&1
   check_output "$WORK_DIR/transcode-$codec.mkv" "$codec" yuv420p
+
+  echo "TEST: NVDEC -> scale_cuda 640x360 -> ${codec}_nvenc"
+  ffmpeg -hide_banner -nostdin -v verbose \
+    -hwaccel cuda -hwaccel_output_format cuda -i "$WORK_DIR/input.mp4" \
+    -vf scale_cuda=640:360:interp_algo=bilinear -an \
+    -c:v "${codec}_nvenc" -preset p4 -rc constqp -qp 20 \
+    "$WORK_DIR/scaled-$codec.mkv" > "$WORK_DIR/scale.log" 2>&1
+  check_output "$WORK_DIR/scaled-$codec.mkv" "$codec" yuv420p 640 360 "$WORK_DIR/scaled-reference.mkv"
 
   echo "TEST: $codec NVDEC -> hwdownload (all $FRAMES frames)"
   # hwdownload requires hardware frames: a software fallback cannot pass.
@@ -92,4 +103,4 @@ PY
   echo "PASS: $codec encode, GPU transcode, and GPU decode"
 done
 
-echo "All NVIDIA hardware tests passed (9 paths)."
+echo "All NVIDIA hardware tests passed (12 paths)."

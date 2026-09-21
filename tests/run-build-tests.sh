@@ -66,6 +66,8 @@ echo "=== Executable Location Tests ==="
 
 run_test "ffmpeg is /usr/local/bin/ffmpeg" assert_command_path ffmpeg /usr/local/bin/ffmpeg
 run_test "ffprobe is /usr/local/bin/ffprobe" assert_command_path ffprobe /usr/local/bin/ffprobe
+run_test "ffmpeg-agent is /usr/local/bin/ffmpeg-agent" assert_command_path ffmpeg-agent /usr/local/bin/ffmpeg-agent
+run_test "ffmpeg-agent --version runs without service configuration" bash -c 'ffmpeg-agent --version | grep -q "^ffmpeg-agent "'
 
 # --- Build option tests ---
 
@@ -85,6 +87,7 @@ BUILD_OPTIONS=(
   --enable-pthreads
   --enable-ffnvcodec
   --enable-cuda
+  --enable-cuda-llvm
   --enable-nvenc
   --enable-nvdec
   --enable-cuvid
@@ -191,6 +194,8 @@ done
 run_test "ffmpeg -version lists libav*" assert_ffmpeg_version_lists_libav
 run_test "heif-enc --version runs" bash -c 'heif-enc --version >/dev/null 2>&1'
 run_test "heif-dec --version runs" bash -c 'heif-dec --version >/dev/null 2>&1'
+
+run_test "CUDA scaling filter available" bash -c "ffmpeg -hide_banner -filters 2>/dev/null | grep -q scale_cuda"
 
 # --- Summary ---
 

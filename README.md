@@ -21,7 +21,8 @@ is needed to build the image or use the software codecs.
 
 ### NVIDIA hardware acceleration
 
-The host needs a supported NVIDIA GPU, a Linux NVIDIA driver **570 or newer**
+If you use NVIDIA hardware acceleration (NVDEC/NVENC), the host needs a supported
+NVIDIA GPU, a Linux NVIDIA driver **570 or newer**
 ([nv-codec-headers 13.0.19 requirements](https://github.com/FFmpeg/nv-codec-headers/tree/n13.0.19.0)),
 and [NVIDIA Container Toolkit configured for Docker](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 Individual GPUs support different codecs; AV1 encoding requires newer hardware.
@@ -43,9 +44,21 @@ Use `hevc_nvenc` or `av1_nvenc` for those output codecs on supported GPUs. If th
 input cannot be decoded by NVDEC, omit the two `-hwaccel*` options to decode on the
 CPU and still encode with NVENC. GPU frames stay on the GPU in the command above;
 CPU filters need an explicit `hwdownload` / format conversion / upload path.
-CUDA-toolkit-dependent filters such as `scale_npp` and `scale_cuda` are not included.
+CUDA filters including `scale_cuda` are built with Clang (`--enable-cuda-llvm`),
+without the CUDA Toolkit. For example, add `-vf scale_cuda=1280:720` before
+`-c:v` above to resize GPU frames. `scale_cuda` supports resizing and compatible
+pixel format conversions;
+it does not convert between YUV and RGB (see the
+[FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html#scale_005fcuda)).
 See [NVIDIA's FFmpeg guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html)
 for the decode and encode model.
+
+## Optional HTTP agent
+
+The image also installs `ffmpeg-agent`, a small Rust worker for bounded, stateless
+GET → FFmpeg → PUT jobs with progress and completion callbacks. It starts only
+when explicitly selected as the container command. See [agent/README.md](agent/README.md)
+for the API, configuration, license, tests and a systemd/Docker unit.
 
 ## Testing
 
