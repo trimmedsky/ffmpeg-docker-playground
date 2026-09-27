@@ -266,3 +266,9 @@ this project does not change host firewall rules or install a gateway.
 The agent code is licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE),
 at your option. This applies to the agent, not to FFmpeg or the other libraries in
 the image; their existing license terms and redistribution constraints still apply.
+
+## Host connector authentication
+
+Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS file and `HNG_SERVICE_ID` to `ffmpeg-spark-1` or `ffmpeg-spark-2`. Every route, including health, then requires an ES256 backend JWT for that service. Legacy bearer tokens and identity headers cannot bypass verification. The shared verifier is vendored from the pinned HNG revision in `vendor/hng-source.json`.
+
+Job input/output/callback endpoints accept ordinary pre-signed URLs from SMSS. The worker needs no service signing key, token cache or callback secret; HTTP methods, streaming, retries and attempt IDs retain their existing wire contract. Container DNS maps `connector.local` to its isolated host bridge listener. The deployment must remove the old agent token and SSH callback tunnel when switching to HNG.

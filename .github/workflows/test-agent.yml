@@ -29,3 +29,4 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --locked
       - run: python3 tests/integration.py target/debug/ffmpeg-agent
+      - run: node --test tests/hng-auth.mjs

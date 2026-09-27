@@ -156,6 +156,7 @@ dependencies = [
  "axum",
  "base64",
  "futures-util",
+ "hng-auth",
  "reqwest",
  "serde",
  "serde_json",
@@ -265,6 +266,18 @@ dependencies = [
  "r-efi",
  "rand_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "hng-auth"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "http",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

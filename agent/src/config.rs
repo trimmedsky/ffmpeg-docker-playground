@@ -3,6 +3,7 @@ use std::{env, fs, net::SocketAddr, path::PathBuf, time::Duration};
 pub struct Config {
     pub listen: SocketAddr,
     pub token: Option<Vec<u8>>,
+    pub backend: Option<hng_auth::client::BackendVerifier>,
     pub work_dir: PathBuf,
     pub ffmpeg: String,
     pub concurrency: usize,
@@ -52,6 +53,7 @@ impl Config {
                 .parse()
                 .map_err(|_| "invalid listen address")?,
             token,
+            backend: hng_auth::client::BackendVerifier::from_env().map_err(|e| e.to_string())?,
             work_dir: env::var("FFMPEG_AGENT_WORK_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| env::temp_dir().join("ffmpeg-agent")),
