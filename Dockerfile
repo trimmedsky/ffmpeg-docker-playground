@@ -2,6 +2,7 @@ FROM rust:1.98.1-slim-bookworm AS agent-build
 WORKDIR /src/agent
 COPY agent/Cargo.toml agent/Cargo.lock ./
 COPY agent/src ./src
+COPY agent/vendor ./vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --locked --release
 
 FROM ubuntu:26.04
