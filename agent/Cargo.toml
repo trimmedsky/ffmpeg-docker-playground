@@ -8,6 +8,7 @@ description = "A small, stateless HTTP worker for FFmpeg jobs"
 repository = "https://github.com/trimmedsky/ffmpeg-docker-playground"
 
 [dependencies]
+hng-auth = { version = "0.1.0", path = "vendor/hng-auth" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

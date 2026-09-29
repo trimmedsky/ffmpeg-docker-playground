@@ -20,6 +20,23 @@ async fn authenticate(
     request: Request,
     next: Next,
 ) -> Response {
+    if let Some(verifier) = &state.config.backend {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if verifier.verify_headers(request.headers(), now).is_err() {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":"unauthorized"})),
+            )
+                .into_response();
+        }
+        return next.run(request).await;
+    }
+    if request.uri().path() == "/healthz" {
+        return next.run(request).await;
+    }
     let token = request
         .headers()
         .get("authorization")
@@ -145,10 +162,8 @@ async fn run() -> Result<(), String> {
             "/healthz",
             get(|| async { Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")})) }),
         )
-        .route(
-            "/v1/jobs/{id}",
-            put(submit).route_layer(middleware::from_fn_with_state(state.clone(), authenticate)),
-        )
+        .route("/v1/jobs/{id}", put(submit))
+        .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .layer(DefaultBodyLimit::max(65536))
         .with_state(state.clone());
     eprintln!(
