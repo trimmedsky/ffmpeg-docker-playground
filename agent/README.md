@@ -249,7 +249,7 @@ keep unrelated credentials, host application data and the Docker socket unmounte
 
 ## Host connector authentication
 
-Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS file and `HNG_SERVICE_ID` to `ffmpeg-1` or `ffmpeg-2`. Every route, including health, then requires an ES256 backend JWT for that service. Legacy bearer tokens and identity headers cannot bypass verification. The shared verifier is vendored from the pinned HNG revision in `vendor/hng-source.json`.
+Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS file and `HNG_SERVICE_ID` to `ffmpeg-1` or `ffmpeg-2`. Every route, including health, then requires an ES256 backend JWT for that service. Legacy bearer tokens and identity headers cannot bypass verification. The shared verifier is vendored byte-for-byte from the pinned HNG revision recorded, with each file's sha256, in `vendor/hng-source.json`; update it with `scripts/vendor-hng-auth.py update <home-net-gateway checkout> <revision>` and CI runs `scripts/vendor-hng-auth.py check`. Backend JWTs whose `exp - iat` exceeds 300 s are rejected (HNG `BACKEND_MAX_LIFETIME_SECS`).
 
 Job input/output/callback endpoints accept ordinary pre-signed URLs from SMSS. The worker needs no service signing key, token cache or callback secret; HTTP methods, streaming, retries and attempt IDs retain their existing wire contract. Container DNS maps `connector.local` to its isolated host bridge listener. The deployment must remove the old agent token and SSH callback tunnel when switching to HNG.
 
