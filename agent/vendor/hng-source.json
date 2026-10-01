@@ -1,4 +1,14 @@
 {
   "repository": "saiya/home-net-gateway",
-  "revision": "70a6d1f19cccba97f9613a6bf33ca603d716b661"
+  "revision": "717fd53c1bf729c24de9fb38e8d9e579f909b17e",
+  "path": "crates/hng-auth",
+  "files": {
+    "Cargo.toml": "493c61f2517336b2918f12b7b2f50694d4e96dcf9cee360cbc8c204f77ef9498",
+    "src/lib.rs": "5573dfa85a0a24607f23c7b470be13e692f9b3a92a85b3c9e2a5fe8c1f8820e8",
+    "src/acl.rs": "de3e3738477e56e2b18f30909608869915b7f3d417e0cca9f8aff4ddb6c0963d",
+    "src/client.rs": "3d8548799d4f4e2209d1c48edcb3ad897dba57a029b959c25e6b5e5b450cc921",
+    "src/jwt.rs": "d3405c5a055e9edfdcd6972c153017b9789d87695ff066676ee67e198b69b33f",
+    "src/model.rs": "c71f80a4842e6873ef07a04a1c23934409e47066799c33a23668e8789f7ee9f7",
+    "src/request.rs": "f82a681c00e69ee1a655989584df09c765ef560128c8454ded20379cdc7845fb"
+  }
 }

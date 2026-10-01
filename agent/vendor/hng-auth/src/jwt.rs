@@ -8,6 +8,17 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 pub const AUTH_TYPE: &str = "hng-auth+jwt";
 pub const BACKEND_TYPE: &str = "hng-backend+jwt";
+/// Lifetime (`exp - iat`) of every backend JWT the connector mints.
+pub const BACKEND_TOKEN_LIFETIME_SECS: u64 = 60;
+/// Largest `exp - iat` a backend verifier accepts. Backends trust nothing but
+/// the local connector key, so a mis-minted or leaked long-lived token must not
+/// stay usable for as long as it claims. Every SDK verifier (`sdk/typescript`,
+/// `sdk/python`, `sdk/go`) enforces the same value, pinned by the shared
+/// `sdk/fixtures/backend.json` conformance vectors. This bound is specific to
+/// backend JWTs: fabric JWTs (`hng-auth+jwt`, including pre-signed URLs) have
+/// their own lifetimes and only use [`validate_time`].
+pub const BACKEND_MAX_LIFETIME_SECS: u64 = 300;
+const _: () = assert!(BACKEND_TOKEN_LIFETIME_SECS <= BACKEND_MAX_LIFETIME_SECS);
 const MAX_TOKEN: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +33,20 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    pub fn from_sec1(kid: String, bytes: &[u8]) -> Result<Self> {
+        if kid.is_empty() || bytes.len() != 65 || bytes[0] != 4 {
+            return Err(Error("invalid ES256 public key"));
+        }
+        Ok(Self {
+            kty: "EC".into(),
+            crv: "P-256".into(),
+            alg: "ES256".into(),
+            kid,
+            x: B64.encode(&bytes[1..33]),
+            y: B64.encode(&bytes[33..65]),
+        })
+    }
+
     pub fn bytes(&self) -> Result<Vec<u8>> {
         if self.kty != "EC" || self.crv != "P-256" || self.alg != "ES256" || self.kid.is_empty() {
             return Err(Error("invalid public key"));
@@ -169,6 +194,14 @@ pub fn validate_time(iat: u64, exp: u64, now: u64) -> Result<()> {
     }
     Ok(())
 }
+/// [`validate_time`] plus the backend-only [`BACKEND_MAX_LIFETIME_SECS`] bound.
+pub fn validate_backend_time(iat: u64, exp: u64, now: u64) -> Result<()> {
+    validate_time(iat, exp, now)?;
+    if exp - iat > BACKEND_MAX_LIFETIME_SECS {
+        return Err(Error("backend token lifetime too long"));
+    }
+    Ok(())
+}
 pub fn verify_backend(token: &str, keys: &Jwks, audience: &str, now: u64) -> Result<BackendClaims> {
     let jwt = Unverified::<BackendClaims>::parse(token, BACKEND_TYPE)?;
     let candidates: Vec<_> = keys.keys.iter().filter(|k| k.kid == jwt.kid()).collect();
@@ -176,7 +209,7 @@ pub fn verify_backend(token: &str, keys: &Jwks, audience: &str, now: u64) -> Res
         return Err(Error("unknown or ambiguous kid"));
     }
     let c = jwt.verify(candidates[0])?;
-    validate_time(c.iat, c.exp, now)?;
+    validate_backend_time(c.iat, c.exp, now)?;
     if c.aud != audience || c.sub.is_empty() || c.name.is_empty() {
         return Err(Error("invalid backend identity"));
     }

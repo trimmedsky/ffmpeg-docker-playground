@@ -36,7 +36,33 @@ pub struct Host {
     pub services: BTreeSet<String>,
     pub server_name: String,
     pub certificate_serials: BTreeSet<String>,
+    /// Grace deadlines for rotated host credentials (also preserve issued URLs).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub retire_after: BTreeMap<String, u64>,
     pub keys: Vec<PublicKey>,
+}
+impl Host {
+    pub fn serial_active(&self, serial: &str, now: u64) -> bool {
+        self.certificate_serials.contains(serial)
+            && self
+                .retire_after
+                .get(serial)
+                .is_none_or(|until| now < *until)
+    }
+    pub fn key_active(&self, key: &PublicKey, now: u64) -> bool {
+        self.keys.contains(key)
+            && self
+                .retire_after
+                .get(&key.kid)
+                .is_none_or(|until| now < *until)
+    }
+    pub fn active_serials(&self, now: u64) -> BTreeSet<String> {
+        self.certificate_serials
+            .iter()
+            .filter(|s| self.serial_active(s, now))
+            .cloned()
+            .collect()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,10 +126,22 @@ impl Snapshot {
                     return Err(Error("invalid or duplicate certificate serial"));
                 }
             }
+            if h.retire_after
+                .keys()
+                .any(|s| !h.certificate_serials.contains(s))
+            {
+                return Err(Error("unknown retired certificate"));
+            }
             if h.services.iter().any(|s| !self.services.contains_key(s)) {
                 return Err(Error("unknown host service"));
             }
             validate_keys(&h.keys)?;
+            if h.keys
+                .iter()
+                .any(|k| !h.certificate_serials.contains(&k.kid))
+            {
+                return Err(Error("host key ID must be its certificate serial"));
+            }
         }
         validate_keys(&self.gateway_keys)?;
         for r in &self.acl {
@@ -143,7 +181,15 @@ impl Snapshot {
         } else {
             return Err(Error("unknown issuer"));
         };
-        let candidates: Vec<_> = keys.iter().filter(|k| k.kid == jwt.kid()).collect();
+        let candidates: Vec<_> = keys
+            .iter()
+            .filter(|k| {
+                k.kid == jwt.kid()
+                    && iss
+                        .strip_prefix("connector:")
+                        .is_none_or(|h| self.hosts[h].key_active(k, now))
+            })
+            .collect();
         if candidates.len() != 1 {
             return Err(Error("unknown or ambiguous issuer key"));
         }

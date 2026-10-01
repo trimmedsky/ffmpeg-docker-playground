@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Set up Rust
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - run: python3 scripts/vendor-hng-auth.py check
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
