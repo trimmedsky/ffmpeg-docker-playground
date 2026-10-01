@@ -195,9 +195,7 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 Authentication may be provided by an SSH tunnel or an authenticated gateway.
 If a token file is configured but unreadable or invalid, startup fails; it never
-silently disables authentication. The supplied systemd example enables a token.
-For transport-only authentication, remove its token bind mount and unset
-`FFMPEG_AGENT_TOKEN_FILE`; token-file creation below can then be omitted.
+silently disables authentication. Production uses the HNG systemd unit and backend JWT verification; the optional bearer mode is only for standalone use.
 
 ### Progress timeouts
 
@@ -228,44 +226,26 @@ failure for active and queued jobs, subject to the service manager's stop timeou
 
 ## Run with systemd and Docker
 
-The example [unit](deploy/ffmpeg-agent.service) binds the host API only to
-`127.0.0.1:18080`, runs as UID/GID 1000 inside the container, requests NVIDIA video
-and compute capabilities, limits CPU/memory/processes, and uses a read-only root
-filesystem. It never pulls an image during startup. Change the GPU flag for a
-CPU-only host and adjust limits for the chosen workloads.
+The [unit](deploy/ffmpeg-agent.service) runs on the isolated `hng-ffmpeg` network
+at `10.254.30.2:8080`, with no host port published. Provision the per-host connector,
+network and ACL before starting it. The container runs as UID/GID 1000, keeps the
+NVIDIA device and resource limits, and mounts only the connector's public JWKS.
 
 ```sh
-# Build or docker load the image first.
+# Build or docker load the immutable image first.
 sudo install -d -m 0755 /etc/ffmpeg-agent
 sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/ffmpeg-agent
-sudo install -m 0600 agent/deploy/agent.env.example /etc/ffmpeg-agent/agent.env
-# Set FFMPEG_AGENT_IMAGE in that file to the image you built/loaded.
-sudo sh -c 'umask 027; openssl rand -hex 32 > /etc/ffmpeg-agent/token'
-sudo chown root:1000 /etc/ffmpeg-agent/token
-sudo chmod 0640 /etc/ffmpeg-agent/token
+sudo install -m 0600 agent/deploy/agent-hng.env.example /etc/ffmpeg-agent/agent-hng.env
+# Set FFMPEG_AGENT_IMAGE and the host's HNG_SERVICE_ID (ffmpeg-1 or ffmpeg-2).
 sudo install -m 0644 agent/deploy/ffmpeg-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ffmpeg-agent
-curl http://127.0.0.1:18080/healthz
 ```
 
-Rotate the token by updating the file and restarting the unit. Changing configuration
-or the image also requires a restart. `systemctl stop ffmpeg-agent` stops the container;
-`systemctl disable --now ffmpeg-agent` removes it from boot startup.
-
-The API is for **trusted callers**: choosing arbitrary FFmpeg arguments and URL
-destinations grants authority within the container and its reachable network.
-The token is not a sandbox for hostile tenants. Do not mount host application data,
-credentials unrelated to the agent, or the Docker socket into the worker. Keep
-host publishing on loopback and use an SSH tunnel or an authenticated TLS gateway
-when remote access is needed. Network access policy belongs to the deployment;
-this project does not change host firewall rules or install a gateway.
-
-## License
-
-The agent code is licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE),
-at your option. This applies to the agent, not to FFmpeg or the other libraries in
-the image; their existing license terms and redistribution constraints still apply.
+Monitor checks `/healthz` through HNG. Image or environment changes require a restart;
+JWKS rotation is reloaded by the verifier. No old agent token or callback SSH tunnel
+is needed. The agent can execute FFmpeg jobs within its container permissions, so
+keep unrelated credentials, host application data and the Docker socket unmounted.
 
 ## Host connector authentication
 
@@ -273,8 +253,8 @@ Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS f
 
 Job input/output/callback endpoints accept ordinary pre-signed URLs from SMSS. The worker needs no service signing key, token cache or callback secret; HTTP methods, streaming, retries and attempt IDs retain their existing wire contract. Container DNS maps `connector.local` to its isolated host bridge listener. The deployment must remove the old agent token and SSH callback tunnel when switching to HNG.
 
-Use `deploy/ffmpeg-agent-hng.service` with `deploy/agent-hng.env.example` on
-Spark after provisioning `hng-ffmpeg`. The backend publishes loopback port 18082;
+Use `deploy/ffmpeg-agent.service` with `deploy/agent-hng.env.example` on
+Spark after provisioning `hng-ffmpeg`. The backend has no published host port;
 the local connector is at `http://connector.local:18080`. The unit retains explicit
 NVIDIA device bindings and resource limits, drops all capabilities, and mounts
 only the connector public-key directory. It carries no host connector private key.
