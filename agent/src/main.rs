@@ -13,7 +13,6 @@ use axum::{
 use engine::{Accepted, Active, Progress};
 use serde_json::json;
 use std::sync::{Arc, atomic::AtomicU64};
-use subtle::ConstantTimeEq;
 
 async fn authenticate(
     State(state): State<Arc<engine::State>>,
@@ -34,27 +33,7 @@ async fn authenticate(
         }
         return next.run(request).await;
     }
-    if request.uri().path() == "/healthz" {
-        return next.run(request).await;
-    }
-    let token = request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if state
-        .config
-        .token
-        .as_ref()
-        .is_some_and(|expected| !bool::from(token.as_bytes().ct_eq(expected)))
-    {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized"})),
-        )
-            .into_response();
-    }
+    // No verifier only with FFMPEG_AGENT_INSECURE_NO_AUTH=1 (config.rs).
     next.run(request).await
 }
 
@@ -121,7 +100,7 @@ async fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. FFMPEG_AGENT_TOKEN_FILE optionally enables bearer authentication.\nSee agent/README.md for the API, limits and deployment."
+                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Requires HNG_BACKEND_JWKS and HNG_SERVICE_ID (host connector backend JWT).\nSee agent/README.md for the API, limits and deployment."
             );
             return;
         }

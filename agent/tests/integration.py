@@ -6,7 +6,6 @@ import http.server
 import json
 import os
 from pathlib import Path
-import secrets
 import signal
 import socket
 import subprocess
@@ -114,10 +113,48 @@ def events(job_id, terminal=None):
         return [e for e in EVENTS if e["id"] == job_id and (terminal is None or e["terminal"] == terminal)]
 
 
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+class Connector:
+    """Stand-in for the host connector: a throwaway ES256 key, its JWKS and backend
+    JWTs (signed with the openssl CLI so the test needs no Python crypto package)."""
+
+    def __init__(self, root, audience="ffmpeg-1"):
+        self.key, self.audience, self.issued = root / "connector.pem", audience, []
+        subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(self.key)],
+                       check=True, capture_output=True)
+        der = subprocess.run(["openssl", "ec", "-in", str(self.key), "-pubout", "-outform", "DER"],
+                             check=True, capture_output=True).stdout
+        point = der[-65:]
+        assert point[0] == 4, "uncompressed P-256 point expected"
+        self.jwks = root / "jwks.json"
+        self.jwks.write_text(json.dumps({"keys": [{"kty": "EC", "crv": "P-256", "alg": "ES256", "kid": "test",
+                                                   "x": b64url(point[1:33]), "y": b64url(point[33:])}]}))
+
+    def token(self, audience=None, lifetime=60):
+        now = int(time.time())
+        data = ".".join(b64url(json.dumps(v, separators=(",", ":")).encode()) for v in (
+            {"alg": "ES256", "typ": "hng-backend+jwt", "kid": "test"},
+            {"sub": "service#smss", "name": "SMSS", "aud": audience or self.audience, "iat": now, "exp": now + lifetime}))
+        der = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(self.key)], input=data.encode(),
+                             check=True, capture_output=True).stdout
+        # DER ECDSA-Sig-Value -> raw r || s (JWS ES256).
+        assert der[0] == 0x30 and der[2] == 0x02
+        r_len = der[3]
+        r = int.from_bytes(der[4:4 + r_len], "big")
+        s_len = der[5 + r_len]
+        s = int.from_bytes(der[6 + r_len:6 + r_len + s_len], "big")
+        token = data + "." + b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+        self.issued.append(token)
+        return token
+
+
 def request(url, data=None, token=None):
     headers = {"Content-Type": "application/json"}
     if token:
-        headers["Authorization"] = "Bearer " + token
+        headers["Authorization"] = "Bearer " + (token() if callable(token) else token)
     req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None, headers=headers, method="PUT" if data is not None else "GET")
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
@@ -137,12 +174,12 @@ def job(name, mode="copy"):
 def agent(**overrides):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        token = secrets.token_hex(32)
-        (root / "token").write_text(token)
+        connector = Connector(root)
+        token = connector.token
         fake = root / "ffmpeg"
         fake.write_text('''#!/usr/bin/env python3
 import os, pathlib, sys, time
-assert "FFMPEG_AGENT_TOKEN_FILE" not in os.environ
+assert "HNG_BACKEND_JWKS" not in os.environ and "HNG_SERVICE_ID" not in os.environ
 mode = sys.argv[sys.argv.index("--mode") + 1]
 print("fixture pid=" + str(os.getpid()), file=sys.stderr, flush=True)
 if mode == "slow": time.sleep(2)
@@ -169,7 +206,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        env = dict(os.environ, FFMPEG_AGENT_TOKEN_FILE=str(root / "token"), FFMPEG_AGENT_LISTEN=f"127.0.0.1:{port}",
+        env = dict(os.environ, HNG_BACKEND_JWKS=str(connector.jwks), HNG_SERVICE_ID="ffmpeg-1", FFMPEG_AGENT_LISTEN=f"127.0.0.1:{port}",
                    FFMPEG_AGENT_WORK_DIR=str(root / "work"), FFMPEG_AGENT_FFMPEG=str(fake),
                    FFMPEG_AGENT_HEARTBEAT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="10")
         env.update(overrides)
@@ -185,7 +222,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                     log.seek(0)
                     raise AssertionError(log.read())
                 try:
-                    return request(url + "/healthz")[0] == 200
+                    return request(url + "/healthz", token=token)[0] == 200
                 except urllib.error.URLError:
                     return False
             try:
@@ -202,7 +239,8 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                 assert process.returncode == 0
                 assert not list((root / "work").glob("job-*")), "temporary files leaked"
                 log.seek(0)
-                assert token not in log.read(), "credential leaked into service log"
+                logged = log.read()
+                assert not any(issued in logged for issued in connector.issued), "credential leaked into service log"
 
 
 def submit(url, token, spec, status=202):
@@ -216,8 +254,26 @@ def terminal(name):
     return wait_for(lambda: events(name, True))[0]
 
 
+def start_fails(env_overrides, message):
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {k: v for k, v in dict(os.environ, FFMPEG_AGENT_LISTEN="127.0.0.1:0", FFMPEG_AGENT_WORK_DIR=str(Path(tmp) / "work"),
+                                     **env_overrides).items() if v is not None}
+        result = subprocess.run([BINARY], env=env, capture_output=True, timeout=10)
+        assert result.returncode == 1 and message in result.stderr, (result.returncode, result.stderr)
+
+
+# Fail closed: no HNG configuration means no start, and the retired bearer token
+# file is refused rather than silently ignored.
+start_fails({"HNG_BACKEND_JWKS": None, "HNG_SERVICE_ID": None}, b"HNG backend authentication is required")
+start_fails({"HNG_BACKEND_JWKS": None, "FFMPEG_AGENT_INSECURE_NO_AUTH": "true"}, b"HNG backend authentication is required")
+start_fails({"FFMPEG_AGENT_TOKEN_FILE": "/dev/null"}, b"FFMPEG_AGENT_TOKEN_FILE is retired")
+print("PASS: refuses to start without HNG or with the retired bearer token file")
+
 with agent() as (_, url, token, root):
     submit(url, None, job("unauthorized"), 401)
+    submit(url, "a" * 64, job("legacy-bearer"), 401)
+    status, _ = request(url + "/healthz")
+    assert status == 401, "health requires the backend JWT"
     malformed = urllib.request.Request(url + "/v1/jobs/invalid", method="PUT", data=b"not-json", headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(malformed, timeout=3)
@@ -330,19 +386,11 @@ with agent() as (_, url, token, root):
         submit(url, token, spec, 400)
 print("PASS: per-endpoint HTTP methods, bounded retries, output replay and permanent failures")
 
-for setting in (None, ""):
-    with agent(FFMPEG_AGENT_TOKEN_FILE=setting) as (_, url, token, root):
-        name = "no-auth-" + str(setting)
-        submit(url, None, job(name))
-        assert terminal(name)["state"] == "succeeded"
-with tempfile.TemporaryDirectory() as tmp:
-    path = Path(tmp) / "token"
-    env = dict(os.environ, FFMPEG_AGENT_TOKEN_FILE=str(path))
-    for content in (None, "", "short"):
-        if content is not None: path.write_text(content)
-        result = subprocess.run([BINARY], env=env, capture_output=True, timeout=5)
-        assert result.returncode == 1
-print("PASS: optional bearer authentication and fail-closed configured token files")
+# Local-test mode: only the explicit flag runs without the backend JWT.
+with agent(HNG_BACKEND_JWKS=None, HNG_SERVICE_ID=None, FFMPEG_AGENT_INSECURE_NO_AUTH="1") as (_, url, token, root):
+    submit(url, None, job("insecure-local"))
+    assert terminal("insecure-local")["state"] == "succeeded"
+print("PASS: unauthenticated only with the explicit local-test flag")
 
 with agent(FFMPEG_AGENT_STALL_TIMEOUT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="0") as (_, url, token, root):
     for mode in ("growth", "progress", "timeout", "no-progress"):

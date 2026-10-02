@@ -160,7 +160,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "subtle",
  "tempfile",
  "tokio",
  "tokio-util",
