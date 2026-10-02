@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise a running agent with real FFmpeg. Run in the same network namespace."""
+"""Exercise a running agent with real FFmpeg. Run in the same network namespace.
+
+The agent must have been started for this test with FFMPEG_AGENT_INSECURE_NO_AUTH=1
+(no HNG settings) in an isolated namespace: a production agent accepts only the host
+connector's backend JWT, which this script cannot mint."""
 import argparse
 import base64
 import http.server
@@ -13,10 +17,8 @@ import urllib.request
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--url", default="http://127.0.0.1:8080")
-parser.add_argument("--token-file")
 parser.add_argument("--gpu", action="store_true")
 args = parser.parse_args()
-token = Path(args.token_file).read_text().strip() if args.token_file else None
 receipt = b'{"fixture":"uploaded"}\n'
 events = []
 lock = threading.Lock()
@@ -84,7 +86,7 @@ with tempfile.TemporaryDirectory() as tmp:
                     "callback": {"url": base + "/callback", "headers": {"X-Callback-Token": "fixture-callback"}},
                     "args": ffmpeg_args, "output_extension": "mp4"}
             req = urllib.request.Request(args.url + "/v1/jobs/" + job_id, method="PUT", data=json.dumps(spec).encode(),
-                                         headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + token} if token else {})})
+                                         headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=10) as response:
                 assert response.status == 202
             deadline = time.monotonic() + 90

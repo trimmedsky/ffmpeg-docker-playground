@@ -25,7 +25,8 @@ python3 tests/integration.py target/debug/ffmpeg-agent
 The checked-in toolchain and `Cargo.lock` fix the build dependencies. Native Linux
 AMD64 and ARM64 are tested in CI. The HTTP integration suite uses a deterministic
 FFmpeg substitute to exercise admission, failures, timeouts and process cleanup;
-`tests/e2e.py` exercises a running agent with real FFmpeg and optional NVIDIA codecs.
+`tests/e2e.py` exercises a running agent with real FFmpeg and optional NVIDIA codecs
+(start that agent with `FFMPEG_AGENT_INSECURE_NO_AUTH=1` in an isolated namespace).
 
 From the repository root, `docker build -t ffmpeg-agent:local .` builds both the
 FFmpeg image and the agent. There is no Rust compiler in the final image.
@@ -34,14 +35,16 @@ FFmpeg image and the agent. There is no Rust compiler in the final image.
 
 ### Health check
 
-`GET /healthz` returns `{"status":"ok","version":"0.1.0"}` without authentication.
+`GET /healthz` returns `{"status":"ok","version":"0.1.0"}`. Like every route it
+requires the host connector's backend JWT (see [Authentication](#authentication)).
 
 ### Submit a job (v1)
 
 Send `PUT /v1/jobs/{id}` with an `application/json` body of at most 64 KiB.
 Choose a caller-generated ID unique to each execution attempt, using 1–80 ASCII
 letters, digits, dashes, underscores or dots. The examples below use `encode-001`.
-When `FFMPEG_AGENT_TOKEN_FILE` is configured, include `Authorization: Bearer <token>`.
+The request carries the host connector's backend JWT (`Authorization: Bearer <JWT>`),
+added by the connector when SMSS calls the agent through it.
 
 Example request body:
 
@@ -110,7 +113,7 @@ Software codecs work too: omit the CUDA input options and select `libx264`, etc.
 | Status | Meaning |
 |---|---|
 | `202` | Accepted; body is `{"id":"encode-001"}` |
-| `401` | Missing or incorrect bearer token when authentication is configured |
+| `401` | Missing or invalid backend JWT |
 | `400` / `413` / `415` / `422` | Invalid job, oversized body, wrong content type or malformed JSON |
 | `409` | That ID is already queued, running or finishing its callback |
 | `429` | All execution and waiting slots are occupied; `Retry-After: 10` |
@@ -179,7 +182,9 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 | Environment variable | Default / meaning |
 |---|---|
-| `FFMPEG_AGENT_TOKEN_FILE` | Optional; unset/empty disables bearer authentication; otherwise a file with 32–1024 printable ASCII token characters |
+| `HNG_BACKEND_JWKS` | Required: the connector's backend JWKS file (directory mounted read-only) |
+| `HNG_SERVICE_ID` | Required: the backend JWT audience, `ffmpeg-1` or `ffmpeg-2` |
+| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` runs without authentication, only for local tests in an isolated namespace; refused together with `HNG_BACKEND_JWKS` |
 | `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`; use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
@@ -193,9 +198,10 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 ### Authentication
 
-Authentication may be provided by an SSH tunnel or an authenticated gateway.
-If a token file is configured but unreadable or invalid, startup fails; it never
-silently disables authentication. Production uses the HNG systemd unit and backend JWT verification; the optional bearer mode is only for standalone use.
+The agent fails closed: without `HNG_BACKEND_JWKS` and `HNG_SERVICE_ID` it refuses to
+start, unless `FFMPEG_AGENT_INSECURE_NO_AUTH=1` is set explicitly for a local test.
+The former bearer-token mode (`FFMPEG_AGENT_TOKEN_FILE`) is retired; setting it is a
+startup error rather than being ignored. See [Host connector authentication](#host-connector-authentication).
 
 ### Progress timeouts
 
@@ -249,9 +255,9 @@ keep unrelated credentials, host application data and the Docker socket unmounte
 
 ## Host connector authentication
 
-Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS file and `HNG_SERVICE_ID` to `ffmpeg-1` or `ffmpeg-2`. Every route, including health, then requires an ES256 backend JWT for that service. Legacy bearer tokens and identity headers cannot bypass verification. The shared verifier is vendored byte-for-byte from the pinned HNG revision recorded, with each file's sha256, in `vendor/hng-source.json`; update it with `scripts/vendor-hng-auth.py update <home-net-gateway checkout> <revision>` and CI runs `scripts/vendor-hng-auth.py check`. Backend JWTs whose `exp - iat` exceeds 300 s are rejected (HNG `BACKEND_MAX_LIFETIME_SECS`).
+Set `HNG_BACKEND_JWKS` to the read-only directory-mounted local connector JWKS file and `HNG_SERVICE_ID` to `ffmpeg-1` or `ffmpeg-2`. Every route, including health, then requires an ES256 backend JWT for that service. Legacy bearer tokens and identity headers cannot bypass verification, and there is no unauthenticated fallback. The shared verifier is vendored byte-for-byte from the pinned HNG revision recorded, with each file's sha256, in `vendor/hng-source.json`; update it with `scripts/vendor-hng-auth.py update <home-net-gateway checkout> <revision>` and CI runs `scripts/vendor-hng-auth.py check`. Backend JWTs whose `exp - iat` exceeds 300 s are rejected (HNG `BACKEND_MAX_LIFETIME_SECS`).
 
-Job input/output/callback endpoints accept ordinary pre-signed URLs from SMSS. The worker needs no service signing key, token cache or callback secret; HTTP methods, streaming, retries and attempt IDs retain their existing wire contract. Container DNS maps `connector.local` to its isolated host bridge listener. The deployment must remove the old agent token and SSH callback tunnel when switching to HNG.
+Job input/output/callback endpoints accept ordinary pre-signed URLs from SMSS. The worker needs no service signing key, token cache or callback secret; HTTP methods, streaming, retries and attempt IDs retain their existing wire contract. Container DNS maps `connector.local` to its isolated host bridge listener. The old agent token and SSH callback tunnel were removed with the HNG migration.
 
 Use `deploy/ffmpeg-agent.service` with `deploy/agent-hng.env.example` on
 Spark after provisioning `hng-ffmpeg`. The backend has no published host port;
