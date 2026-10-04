@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Exercise a running agent with real FFmpeg. Run in the same network namespace."""
+"""Exercise a running agent with real FFmpeg. Run in the same network namespace.
+
+Without --issuer-dir the agent must run with FFMPEG_AGENT_INSECURE_NO_AUTH=1 (isolated
+test only). With it, the script mints a fresh JWT per request from a key created by
+`tests/jwt_issuer.py init DIR`; start the agent with FFMPEG_AGENT_AUTH_JWKS_FILE=DIR/jwks.json
+and the matching FFMPEG_AGENT_AUTH_AUDIENCE (plus ISSUER / TYP if you pass them here)."""
 import argparse
 import base64
 import http.server
@@ -11,12 +16,19 @@ import threading
 import time
 import urllib.request
 
+from jwt_issuer import Issuer
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--url", default="http://127.0.0.1:8080")
-parser.add_argument("--token-file")
+parser.add_argument("--issuer-dir", help="directory written by `jwt_issuer.py init`")
+parser.add_argument("--kid", default="test-key")
+parser.add_argument("--audience", default="ffmpeg-agent")
+parser.add_argument("--issuer")
+parser.add_argument("--typ")
 parser.add_argument("--gpu", action="store_true")
 args = parser.parse_args()
-token = Path(args.token_file).read_text().strip() if args.token_file else None
+token = (Issuer(args.issuer_dir, kid=args.kid, audience=args.audience, issuer=args.issuer, typ=args.typ, create=False)
+         if args.issuer_dir else None)
 receipt = b'{"fixture":"uploaded"}\n'
 events = []
 lock = threading.Lock()
@@ -84,7 +96,7 @@ with tempfile.TemporaryDirectory() as tmp:
                     "callback": {"url": base + "/callback", "headers": {"X-Callback-Token": "fixture-callback"}},
                     "args": ffmpeg_args, "output_extension": "mp4"}
             req = urllib.request.Request(args.url + "/v1/jobs/" + job_id, method="PUT", data=json.dumps(spec).encode(),
-                                         headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + token} if token else {})})
+                                         headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + token()} if token else {})})
             with urllib.request.urlopen(req, timeout=10) as response:
                 assert response.status == 202
             deadline = time.monotonic() + 90

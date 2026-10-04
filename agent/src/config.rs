@@ -1,8 +1,9 @@
-use std::{env, fs, net::SocketAddr, path::PathBuf, time::Duration};
+use crate::auth::Authenticator;
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 pub struct Config {
     pub listen: SocketAddr,
-    pub token: Option<Vec<u8>>,
+    pub auth: Authenticator,
     pub work_dir: PathBuf,
     pub ffmpeg: String,
     pub concurrency: usize,
@@ -27,31 +28,13 @@ fn number(name: &str, default: u64, min: u64, max: u64) -> Result<u64, String> {
 
 impl Config {
     pub fn load() -> Result<Self, String> {
-        let token = match env::var("FFMPEG_AGENT_TOKEN_FILE") {
-            Err(env::VarError::NotPresent) => None,
-            Ok(path) if path.is_empty() => None,
-            Err(_) => return Err("invalid FFMPEG_AGENT_TOKEN_FILE".into()),
-            Ok(path) => {
-                let token = fs::read_to_string(path)
-                    .map_err(|_| "cannot read token file")?
-                    .trim()
-                    .as_bytes()
-                    .to_vec();
-                if token.len() < 32
-                    || token.len() > 1024
-                    || token.iter().any(|c| !c.is_ascii_graphic())
-                {
-                    return Err("token must contain 32..1024 printable ASCII characters".into());
-                }
-                Some(token)
-            }
-        };
+        let auth = Authenticator::from_env()?;
         Ok(Self {
             listen: env::var("FFMPEG_AGENT_LISTEN")
                 .unwrap_or_else(|_| "127.0.0.1:8080".into())
                 .parse()
                 .map_err(|_| "invalid listen address")?,
-            token,
+            auth,
             work_dir: env::var("FFMPEG_AGENT_WORK_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| env::temp_dir().join("ffmpeg-agent")),

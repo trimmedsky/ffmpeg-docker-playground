@@ -1,10 +1,11 @@
+mod auth;
 mod config;
 mod engine;
 mod model;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{DefaultBodyLimit, Extension, Path, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -12,38 +13,46 @@ use axum::{
 };
 use engine::{Accepted, Active, Progress};
 use serde_json::json;
-use std::sync::{Arc, atomic::AtomicU64};
-use subtle::ConstantTimeEq;
+use std::{
+    sync::{Arc, atomic::AtomicU64},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+/// Every route, including health and unknown paths, passes through here before any
+/// body is read.
 async fn authenticate(
     State(state): State<Arc<engine::State>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    let token = request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if state
-        .config
-        .token
-        .as_ref()
-        .is_some_and(|expected| !bool::from(token.as_bytes().ct_eq(expected)))
-    {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"unauthorized"})),
-        )
-            .into_response();
+    // A clock before the epoch yields 0, which no valid token accepts.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    match state.config.auth.authenticate(request.headers(), now) {
+        Ok(principal) => {
+            if let Some(principal) = principal {
+                request.extensions_mut().insert(principal);
+            }
+            next.run(request).await
+        }
+        Err(rejection) => {
+            // The reason is for the operator; the client learns nothing beyond 401.
+            eprintln!("request rejected: {rejection}");
+            (
+                StatusCode::UNAUTHORIZED,
+                [("www-authenticate", "Bearer")],
+                Json(json!({"error":"unauthorized"})),
+            )
+                .into_response()
+        }
     }
-    next.run(request).await
 }
 
 async fn submit(
     State(state): State<Arc<engine::State>>,
     Path(id): Path<String>,
+    principal: Option<Extension<auth::Verified>>,
     Json(mut job): Json<model::Job>,
 ) -> Response {
     job.id = id;
@@ -91,6 +100,9 @@ async fn submit(
         jobs.remove(&id);
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    if let Some(Extension(principal)) = principal {
+        eprintln!("job {id} accepted from {:?}", principal.subject);
+    }
     (StatusCode::ACCEPTED, Json(json!({"id":id}))).into_response()
 }
 
@@ -104,7 +116,7 @@ async fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. FFMPEG_AGENT_TOKEN_FILE optionally enables bearer authentication.\nSee agent/README.md for the API, limits and deployment."
+                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Requests must carry an ES256 JWT (FFMPEG_AGENT_AUTH_JWKS_FILE, FFMPEG_AGENT_AUTH_AUDIENCE).\nSee agent/README.md for the API, limits and deployment."
             );
             return;
         }
@@ -122,6 +134,7 @@ async fn main() {
 
 async fn run() -> Result<(), String> {
     let config = config::Config::load()?;
+    eprintln!("ffmpeg-agent: {}", config.auth.describe());
     let address = config.listen;
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -145,10 +158,8 @@ async fn run() -> Result<(), String> {
             "/healthz",
             get(|| async { Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")})) }),
         )
-        .route(
-            "/v1/jobs/{id}",
-            put(submit).route_layer(middleware::from_fn_with_state(state.clone(), authenticate)),
-        )
+        .route("/v1/jobs/{id}", put(submit))
+        .layer(middleware::from_fn_with_state(state.clone(), authenticate))
         .layer(DefaultBodyLimit::max(65536))
         .with_state(state.clone());
     eprintln!(

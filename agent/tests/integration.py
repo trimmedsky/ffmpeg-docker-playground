@@ -2,11 +2,11 @@
 """Real HTTP/process contract tests; only FFmpeg is replaced by a deterministic fixture."""
 import base64
 import contextlib
+import http.client
 import http.server
 import json
 import os
 from pathlib import Path
-import secrets
 import signal
 import socket
 import subprocess
@@ -15,7 +15,10 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+from jwt_issuer import Issuer
 
 BINARY = str(Path(sys.argv[1]).resolve())
 PAYLOAD = b"fixture media bytes\x00\xff"
@@ -115,15 +118,33 @@ def events(job_id, terminal=None):
 
 
 def request(url, data=None, token=None):
+    """`token` is a JWT, or a callable (such as an Issuer) that mints a fresh one."""
     headers = {"Content-Type": "application/json"}
     if token:
-        headers["Authorization"] = "Bearer " + token
+        headers["Authorization"] = "Bearer " + (token() if callable(token) else token)
     req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None, headers=headers, method="PUT" if data is not None else "GET")
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
+
+
+def raw_request(url, method, path, headers, body=b""):
+    """For what urllib cannot express, such as repeated headers. Returns (status, headers)."""
+    parts = urllib.parse.urlsplit(url)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port, timeout=3)
+    try:
+        connection.putrequest(method, path)
+        for name, value in headers:
+            connection.putheader(name, value)
+        connection.putheader("Content-Length", str(len(body)))
+        connection.endheaders(body)
+        response = connection.getresponse()
+        response.read()
+        return response.status, response.headers
+    finally:
+        connection.close()
 
 
 def job(name, mode="copy"):
@@ -137,12 +158,14 @@ def job(name, mode="copy"):
 def agent(**overrides):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        token = secrets.token_hex(32)
-        (root / "token").write_text(token)
+        # The test issuer mints what the configured policy asks for.
+        token = Issuer(root / "issuer", issuer=overrides.get("FFMPEG_AGENT_AUTH_ISSUER"),
+                       typ=overrides.get("FFMPEG_AGENT_AUTH_TYP"))
+        jwks = token.write_jwks()
         fake = root / "ffmpeg"
         fake.write_text('''#!/usr/bin/env python3
 import os, pathlib, sys, time
-assert "FFMPEG_AGENT_TOKEN_FILE" not in os.environ
+assert not [name for name in os.environ if name.startswith("FFMPEG_AGENT")], "agent settings leaked to FFmpeg"
 mode = sys.argv[sys.argv.index("--mode") + 1]
 print("fixture pid=" + str(os.getpid()), file=sys.stderr, flush=True)
 if mode == "slow": time.sleep(2)
@@ -169,7 +192,8 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        env = dict(os.environ, FFMPEG_AGENT_TOKEN_FILE=str(root / "token"), FFMPEG_AGENT_LISTEN=f"127.0.0.1:{port}",
+        env = dict(os.environ, FFMPEG_AGENT_AUTH_JWKS_FILE=str(jwks), FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent",
+                   FFMPEG_AGENT_LISTEN=f"127.0.0.1:{port}",
                    FFMPEG_AGENT_WORK_DIR=str(root / "work"), FFMPEG_AGENT_FFMPEG=str(fake),
                    FFMPEG_AGENT_HEARTBEAT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="10")
         env.update(overrides)
@@ -185,7 +209,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                     log.seek(0)
                     raise AssertionError(log.read())
                 try:
-                    return request(url + "/healthz")[0] == 200
+                    return request(url + "/healthz", token=token if "FFMPEG_AGENT_AUTH_JWKS_FILE" in env else None)[0] == 200
                 except urllib.error.URLError:
                     return False
             try:
@@ -202,7 +226,9 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                 assert process.returncode == 0
                 assert not list((root / "work").glob("job-*")), "temporary files leaked"
                 log.seek(0)
-                assert token not in log.read(), "credential leaked into service log"
+                logged = log.read()
+                assert not [t for t in token.issued if t in logged], "credential leaked into service log"
+                assert token.key.read_text() not in logged
 
 
 def submit(url, token, spec, status=202):
@@ -216,8 +242,69 @@ def terminal(name):
     return wait_for(lambda: events(name, True))[0]
 
 
+def start_fails(message, **overrides):
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, FFMPEG_AGENT_LISTEN="127.0.0.1:0", FFMPEG_AGENT_WORK_DIR=str(Path(tmp) / "work"))
+        env = {k: v for k, v in env.items() if not k.startswith("FFMPEG_AGENT_AUTH") and k != "FFMPEG_AGENT_INSECURE_NO_AUTH"}
+        env.update({k: str(v) for k, v in overrides.items()})
+        result = subprocess.run([BINARY], env=env, capture_output=True, timeout=10)
+        assert result.returncode == 1 and message in result.stderr, (overrides, result.returncode, result.stderr)
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    issuer = Issuer(Path(tmp) / "issuer")
+    jwks = issuer.write_jwks()
+    broken = Path(tmp) / "broken.json"
+    broken.write_text(json.dumps({"keys": [issuer.jwk(), issuer.jwk()]}))
+    empty = Path(tmp) / "empty.json"
+    empty.write_text(json.dumps({"keys": []}))
+    start_fails(b"authentication is required")
+    for flag in ("0", "true", ""):
+        start_fails(b"FFMPEG_AGENT_INSECURE_NO_AUTH", FFMPEG_AGENT_INSECURE_NO_AUTH=flag)
+    start_fails(b"FFMPEG_AGENT_TOKEN_FILE is no longer supported", FFMPEG_AGENT_TOKEN_FILE="/dev/null")
+    start_fails(b"FFMPEG_AGENT_AUTH_AUDIENCE is required", FFMPEG_AGENT_AUTH_JWKS_FILE=jwks)
+    start_fails(b"set without", FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent")
+    start_fails(b"cannot be combined", FFMPEG_AGENT_AUTH_JWKS_FILE=jwks, FFMPEG_AGENT_AUTH_AUDIENCE="a",
+                FFMPEG_AGENT_INSECURE_NO_AUTH="1")
+    for path, message in ((Path(tmp) / "missing.json", b"cannot open"), (broken, b"duplicate kid"), (empty, b"no keys")):
+        start_fails(message, FFMPEG_AGENT_AUTH_JWKS_FILE=path, FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent")
+print("PASS: refuses to start without, with incomplete or with contradictory authentication settings")
+
 with agent() as (_, url, token, root):
     submit(url, None, job("unauthorized"), 401)
+    submit(url, "a" * 64, job("static-bearer"), 401)
+    assert request(url + "/healthz")[0] == 401, "health requires a token"
+    assert request(url + "/no-such-route")[0] == 401, "unknown routes are not revealed before authentication"
+    status, headers = raw_request(url, "GET", "/healthz", [("X-User-Id", "example-caller")])
+    assert status == 401 and headers["WWW-Authenticate"] == "Bearer", "identity headers do not authenticate"
+    assert raw_request(url, "GET", "/healthz", [("Authorization", "Bearer " + token())])[0] == 200
+    assert raw_request(url, "GET", "/healthz", [("Authorization", "bearer " + token())])[0] == 200
+    duplicate = [("Authorization", "Bearer " + token()), ("Authorization", "Bearer " + token())]
+    assert raw_request(url, "GET", "/healthz", duplicate)[0] == 401, "repeated credentials are refused"
+    assert request(url + "/no-such-route", token=token)[0] == 404
+    assert request(url + "/healthz", token=token.token(aud="another-service"))[0] == 401
+    assert request(url + "/healthz", token=token.token(lifetime=300))[0] == 200
+    assert request(url + "/healthz", token=token.token(lifetime=301))[0] == 401
+    assert request(url + "/healthz", token=token.token(iat=int(time.time()) - 120, exp=int(time.time()) - 60))[0] == 401, "expired"
+    assert request(url + "/healthz", token=token.token(header={"alg": "none"}))[0] == 401
+    assert request(url + "/healthz", token=token.token(header={"jwk": token.jwk()}))[0] == 401
+    assert request(url + "/healthz", token=token.token(sub=None))[0] == 401
+    stranger = Issuer(root / "stranger")
+    assert request(url + "/healthz", token=stranger.token())[0] == 401, "same kid, unknown key"
+    # Rotation: publish the next key alongside the current one, switch, then retire the old key.
+    successor = Issuer(root / "successor", kid="next-key")
+    jwks = root / "issuer" / "jwks.json"
+    assert request(url + "/healthz", token=successor)[0] == 401
+    token.write_jwks(jwks, token.jwk(), successor.jwk())
+    assert request(url + "/healthz", token=successor)[0] == 200, "a published key is usable at once"
+    assert request(url + "/healthz", token=token)[0] == 200
+    token.write_jwks(jwks, successor.jwk())
+    assert request(url + "/healthz", token=token)[0] == 401, "a retired key is refused at once"
+    jwks.write_text("{")
+    assert request(url + "/healthz", token=successor)[0] == 401, "a broken JWKS fails closed"
+    token.write_jwks(jwks)
+    assert request(url + "/healthz", token=token)[0] == 200
+    token.issued += successor.issued + stranger.issued
     malformed = urllib.request.Request(url + "/v1/jobs/invalid", method="PUT", data=b"not-json", headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(malformed, timeout=3)
@@ -330,19 +417,28 @@ with agent() as (_, url, token, root):
         submit(url, token, spec, 400)
 print("PASS: per-endpoint HTTP methods, bounded retries, output replay and permanent failures")
 
-for setting in (None, ""):
-    with agent(FFMPEG_AGENT_TOKEN_FILE=setting) as (_, url, token, root):
-        name = "no-auth-" + str(setting)
-        submit(url, None, job(name))
-        assert terminal(name)["state"] == "succeeded"
-with tempfile.TemporaryDirectory() as tmp:
-    path = Path(tmp) / "token"
-    env = dict(os.environ, FFMPEG_AGENT_TOKEN_FILE=str(path))
-    for content in (None, "", "short"):
-        if content is not None: path.write_text(content)
-        result = subprocess.run([BINARY], env=env, capture_output=True, timeout=5)
-        assert result.returncode == 1
-print("PASS: optional bearer authentication and fail-closed configured token files")
+# Issuer, JOSE type, subject allow-list and a shorter lifetime bound, as a deployment
+# behind a token-minting gateway or sidecar might configure them.
+with agent(FFMPEG_AGENT_AUTH_ISSUER="example-issuer", FFMPEG_AGENT_AUTH_TYP="example+jwt",
+           FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS="60", FFMPEG_AGENT_AUTH_SUBJECTS="example-caller,other-caller") as (_, url, token, root):
+    # Unknown claims (here a display name and a scope) are accepted and ignored.
+    submit(url, token.token(name="Example caller", scope=["jobs"]), job("strict-policy"))
+    assert terminal("strict-policy")["state"] == "succeeded"
+    assert request(url + "/healthz", token=token.token(sub="other-caller", aud=["ffmpeg-agent", "x"]))[0] == 200
+    assert request(url + "/healthz", token=token.token(iss=None))[0] == 401, "issuer required"
+    assert request(url + "/healthz", token=token.token(iss="other-issuer"))[0] == 401
+    assert request(url + "/healthz", token=token.token(header={"typ": None}))[0] == 401, "typ required"
+    assert request(url + "/healthz", token=token.token(header={"typ": "JWT"}))[0] == 401
+    assert request(url + "/healthz", token=token.token(sub="someone-else"))[0] == 401
+    assert request(url + "/healthz", token=token.token(lifetime=60))[0] == 200
+    assert request(url + "/healthz", token=token.token(lifetime=61))[0] == 401
+print("PASS: issuer, typ, subject allow-list and lifetime bound")
+
+# Isolated local tests only: the explicit flag is the one way to run without a token.
+with agent(FFMPEG_AGENT_AUTH_JWKS_FILE=None, FFMPEG_AGENT_AUTH_AUDIENCE=None, FFMPEG_AGENT_INSECURE_NO_AUTH="1") as (_, url, token, root):
+    submit(url, None, job("insecure-local"))
+    assert terminal("insecure-local")["state"] == "succeeded"
+print("PASS: unauthenticated only with the explicit local-test flag")
 
 with agent(FFMPEG_AGENT_STALL_TIMEOUT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="0") as (_, url, token, root):
     for mode in ("growth", "progress", "timeout", "no-progress"):
