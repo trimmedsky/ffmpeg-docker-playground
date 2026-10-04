@@ -24,8 +24,10 @@ python3 tests/integration.py target/debug/ffmpeg-agent
 
 The checked-in toolchain and `Cargo.lock` fix the build dependencies. Native Linux
 AMD64 and ARM64 are tested in CI. The HTTP integration suite uses a deterministic
-FFmpeg substitute to exercise admission, failures, timeouts and process cleanup;
-`tests/e2e.py` exercises a running agent with real FFmpeg and optional NVIDIA codecs.
+FFmpeg substitute to exercise authentication, admission, failures, timeouts and process
+cleanup; it needs `python3` and the `openssl` command (for its throwaway JWT issuer,
+`tests/jwt_issuer.py`). `tests/e2e.py` exercises a running agent with real FFmpeg and
+optional NVIDIA codecs; see its header for how to authenticate it.
 
 From the repository root, `docker build -t ffmpeg-agent:local .` builds both the
 FFmpeg image and the agent. There is no Rust compiler in the final image.
@@ -34,14 +36,15 @@ FFmpeg image and the agent. There is no Rust compiler in the final image.
 
 ### Health check
 
-`GET /healthz` returns `{"status":"ok","version":"0.1.0"}` without authentication.
+`GET /healthz` returns `{"status":"ok","version":"0.1.0"}`. Like every route, it
+requires authentication (see [Authentication](#authentication)).
 
 ### Submit a job (v1)
 
 Send `PUT /v1/jobs/{id}` with an `application/json` body of at most 64 KiB.
 Choose a caller-generated ID unique to each execution attempt, using 1–80 ASCII
 letters, digits, dashes, underscores or dots. The examples below use `encode-001`.
-When `FFMPEG_AGENT_TOKEN_FILE` is configured, include `Authorization: Bearer <token>`.
+Every request carries `Authorization: Bearer <JWT>`.
 
 Example request body:
 
@@ -110,7 +113,7 @@ Software codecs work too: omit the CUDA input options and select `libx264`, etc.
 | Status | Meaning |
 |---|---|
 | `202` | Accepted; body is `{"id":"encode-001"}` |
-| `401` | Missing or incorrect bearer token when authentication is configured |
+| `401` | Missing or invalid JWT (any route; the reason is logged by the agent, not returned) |
 | `400` / `413` / `415` / `422` | Invalid job, oversized body, wrong content type or malformed JSON |
 | `409` | That ID is already queued, running or finishing its callback |
 | `429` | All execution and waiting slots are occupied; `Retry-After: 10` |
@@ -179,7 +182,13 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 | Environment variable | Default / meaning |
 |---|---|
-| `FFMPEG_AGENT_TOKEN_FILE` | Optional; unset/empty disables bearer authentication; otherwise a file with 32–1024 printable ASCII token characters |
+| `FFMPEG_AGENT_AUTH_JWKS_FILE` | Path of the JWKS file with the issuer's ES256 public keys. Required unless authentication is explicitly disabled |
+| `FFMPEG_AGENT_AUTH_AUDIENCE` | Required with a JWKS file: the `aud` value that designates this agent |
+| `FFMPEG_AGENT_AUTH_ISSUER` | Optional: when set, `iss` must be present and equal |
+| `FFMPEG_AGENT_AUTH_TYP` | Optional: when set, the JOSE `typ` header must be present and equal (exact, case-sensitive) |
+| `FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS` | `300`, range 1–86400; upper bound on `exp - iat` |
+| `FFMPEG_AGENT_AUTH_SUBJECTS` | Optional comma-separated allow-list of `sub` values |
+| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting |
 | `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`; use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
@@ -193,11 +202,76 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 
 ### Authentication
 
-Authentication may be provided by an SSH tunnel or an authenticated gateway.
-If a token file is configured but unreadable or invalid, startup fails; it never
-silently disables authentication. The supplied systemd example enables a token.
-For transport-only authentication, remove its token bind mount and unset
-`FFMPEG_AGENT_TOKEN_FILE`; token-file creation below can then be omitted.
+The agent authenticates every request, including `/healthz` and unknown paths, before
+reading the body. It verifies a standard JSON Web Token (RFC 7519) itself, with no
+external service or SDK, so any gateway, reverse proxy, sidecar or calling service that
+can mint an ES256 JWT can use it. Typical setups are a gateway that signs a short-lived
+token for each forwarded request, or a caller that signs its own tokens.
+
+It fails closed: without `FFMPEG_AGENT_AUTH_JWKS_FILE` and `FFMPEG_AGENT_AUTH_AUDIENCE`
+it refuses to start, as it does for an unreadable, invalid or empty key file and for
+contradictory settings. Only `FFMPEG_AGENT_INSECURE_NO_AUTH=1` (exactly `1`) runs without
+authentication, and the startup log says so. The static bearer token of earlier versions
+(`FFMPEG_AGENT_TOKEN_FILE`) is no longer supported; setting it is a startup error.
+
+A request is accepted only if all of these hold:
+
+- Exactly one `Authorization` header, `Bearer <token>`; the token is at most 16 KiB of
+  base64url and dots. Credentials in other headers or the query string are ignored.
+- The token is a JWS in compact serialization (three base64url parts without padding).
+- The JOSE header has `alg` `ES256` (no other algorithm, never `none`) and a `kid`, and
+  no members besides `alg`, `kid` and `typ`. Keys or key URLs in the token (`jwk`, `jku`,
+  `x5u`, `x5c`) and `crit` are refused. With `FFMPEG_AGENT_AUTH_TYP`, `typ` must equal it.
+- `kid` names a key in the JWKS file and the ES256 signature (64-byte `r || s`) verifies.
+- The claims are a JSON object without duplicate members and contain:
+  - `sub`: a non-empty string (in `FFMPEG_AGENT_AUTH_SUBJECTS`, if set);
+  - `aud`: a string or an array of strings containing `FFMPEG_AGENT_AUTH_AUDIENCE`;
+  - `iat` and `exp`: integer NumericDates with `iat < exp`, `exp` after now,
+    `iat` at most 15 s in the future, and `exp - iat` at most
+    `FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS`;
+  - `nbf`, if present: at most 15 s in the future;
+  - `iss`: equal to `FFMPEG_AGENT_AUTH_ISSUER`, if that is set.
+
+  Other claims are allowed and ignored.
+
+Short lifetimes are the revocation mechanism: issue tokens per request or for a minute
+or so, and keep the maximum lifetime small.
+
+Rejected requests get `401` with `WWW-Authenticate: Bearer` and no detail; the agent
+logs the reason (never the token). Accepted job submissions are logged with their `sub`.
+
+#### JWKS file
+
+The key file is a JWK Set (RFC 7517) with public P-256 keys only:
+
+```json
+{"keys": [
+  {"kty": "EC", "crv": "P-256", "kid": "2026-10", "alg": "ES256", "use": "sig",
+   "x": "<base64url, 32 bytes>", "y": "<base64url, 32 bytes>"}
+]}
+```
+
+`kid`, `kty`, `crv`, `x` and `y` are required; `alg` (`ES256`) and `use` (`sig`) are
+optional. The whole file is refused if any key is invalid, not on the curve, a private
+key (`d`), of another type, or shares its `kid` with another key; the file may hold at
+most 64 keys and 1 MiB. To create a test key pair and tokens, use
+`python3 tests/jwt_issuer.py init DIR` and `python3 tests/jwt_issuer.py token DIR --aud ffmpeg-agent`.
+
+#### Key rotation
+
+The agent checks the file's metadata on every request and re-reads it when it changes,
+and at least every 5 seconds, so rotation needs no restart:
+
+1. Add the new key (new `kid`) to the file. It is usable at once.
+2. Switch the issuer to the new key.
+3. After the longest token lifetime has passed, remove the old key. Tokens signed with
+   it are refused from the next request on.
+
+Replace the file atomically (write a temporary file in the same directory, then rename
+it). When the agent runs in a container, bind-mount the **directory** that holds the
+file, not the file itself: a single-file bind mount keeps showing the old file after a
+rename. A file that becomes unreadable or invalid rejects every request (it never keeps
+stale keys) until it is fixed; an empty `keys` array revokes everything.
 
 ### Progress timeouts
 
@@ -230,36 +304,41 @@ failure for active and queued jobs, subject to the service manager's stop timeou
 
 The example [unit](deploy/ffmpeg-agent.service) binds the host API only to
 `127.0.0.1:18080`, runs as UID/GID 1000 inside the container, requests NVIDIA video
-and compute capabilities, limits CPU/memory/processes, and uses a read-only root
-filesystem. It never pulls an image during startup. Change the GPU flag for a
-CPU-only host and adjust limits for the chosen workloads.
+and compute capabilities with explicit device nodes, limits CPU/memory/processes,
+drops all capabilities and uses a read-only root filesystem. It mounts only the work
+directory and, read-only, the directory holding the JWKS file. It never pulls an image
+during startup. Remove the GPU lines for a CPU-only host and adjust limits for the
+chosen workloads. If the caller reaches the agent through a gateway or sidecar on a
+dedicated Docker network, attach the container to that network instead of publishing
+a host port.
 
 ```sh
 # Build or docker load the image first.
-sudo install -d -m 0755 /etc/ffmpeg-agent
+sudo install -d -m 0755 /etc/ffmpeg-agent /etc/ffmpeg-agent/auth
 sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/ffmpeg-agent
 sudo install -m 0600 agent/deploy/agent.env.example /etc/ffmpeg-agent/agent.env
-# Set FFMPEG_AGENT_IMAGE in that file to the image you built/loaded.
-sudo sh -c 'umask 027; openssl rand -hex 32 > /etc/ffmpeg-agent/token'
-sudo chown root:1000 /etc/ffmpeg-agent/token
-sudo chmod 0640 /etc/ffmpeg-agent/token
+# Set FFMPEG_AGENT_IMAGE and FFMPEG_AGENT_AUTH_* in that file for your issuer.
+# Install the issuer's public keys (public data; the agent never needs a private key):
+sudo install -m 0644 jwks.json /etc/ffmpeg-agent/auth/jwks.json
 sudo install -m 0644 agent/deploy/ffmpeg-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ffmpeg-agent
-curl http://127.0.0.1:18080/healthz
+curl -H "Authorization: Bearer $(python3 agent/tests/jwt_issuer.py token DIR --aud ffmpeg-agent)" \
+  http://127.0.0.1:18080/healthz   # with a test issuer; use a token from your issuer otherwise
 ```
 
-Rotate the token by updating the file and restarting the unit. Changing configuration
-or the image also requires a restart. `systemctl stop ffmpeg-agent` stops the container;
-`systemctl disable --now ffmpeg-agent` removes it from boot startup.
+Key rotation needs no restart (see [Key rotation](#key-rotation)). Changing the
+environment file or the image requires a restart. `systemctl stop ffmpeg-agent` stops the
+container; `systemctl disable --now ffmpeg-agent` removes it from boot startup.
 
 The API is for **trusted callers**: choosing arbitrary FFmpeg arguments and URL
 destinations grants authority within the container and its reachable network.
-The token is not a sandbox for hostile tenants. Do not mount host application data,
-credentials unrelated to the agent, or the Docker socket into the worker. Keep
-host publishing on loopback and use an SSH tunnel or an authenticated TLS gateway
-when remote access is needed. Network access policy belongs to the deployment;
-this project does not change host firewall rules or install a gateway.
+Authentication decides who may submit jobs; it is not a sandbox for hostile tenants.
+Do not mount host application data, credentials unrelated to the agent, or the Docker
+socket into the worker. Keep host publishing on loopback or on an isolated network, and
+put a TLS-terminating gateway in front when remote access is needed. Network access
+policy belongs to the deployment; this project does not change host firewall rules or
+install a gateway.
 
 ## License
 

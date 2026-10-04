@@ -57,8 +57,10 @@ for the decode and encode model.
 
 The image also installs `ffmpeg-agent`, a small Rust worker for bounded, stateless
 GET → FFmpeg → PUT jobs with progress and completion callbacks. It starts only
-when explicitly selected as the container command. See [agent/README.md](agent/README.md)
-for the API, configuration, license, tests and a systemd/Docker unit.
+when explicitly selected as the container command, and authenticates callers with
+standard ES256 JWTs verified against a JWKS file, so any gateway, sidecar or service
+that can mint such a token can call it. See [agent/README.md](agent/README.md)
+for the API, authentication, configuration, license, tests and a systemd/Docker unit.
 
 ## Testing
 
