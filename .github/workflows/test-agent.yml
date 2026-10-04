@@ -1,6 +1,7 @@
 name: test agent
 on:
   push:
+    branches: [master]
     paths:
       - 'agent/**'
       - '.github/workflows/test-agent.yml'
@@ -10,6 +11,9 @@ on:
       - '.github/workflows/test-agent.yml'
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     strategy:
