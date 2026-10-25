@@ -129,3 +129,8 @@ Listing encoders alone is not evidence that the host can use them.
 ## Update libraries
 
 Modify version number `ARG`s in `Dockerfile`, then run `docker build` and the test suites again.
+
+The base images (`FROM`) are pinned by digest, so a rebuild does not pick up a different image
+under the same tag. To move one, change its tag and digest together; the digest is the one
+`docker buildx imagetools inspect <image>:<tag>` prints for the tag (the multi-arch index). Keep
+the Rust image's version equal to `agent/rust-toolchain.toml`.
