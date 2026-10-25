@@ -1,10 +1,12 @@
-FROM rust:1.98.1-slim-bookworm AS agent-build
+# Base images are pinned by digest (`name:tag@sha256:<index digest>`, multi-arch); see
+# "Update libraries" in README.md to move one.
+FROM rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS agent-build
 WORKDIR /src/agent
 COPY agent/Cargo.toml agent/Cargo.lock ./
 COPY agent/src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --locked --release
 
-FROM ubuntu:26.04
+FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Don't update bootloader: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=594189
