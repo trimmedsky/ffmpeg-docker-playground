@@ -111,7 +111,10 @@ jobs:
           retention-days: 1
 
       # The same build again on the same builder, entirely from its cache, written as the tar of
-      # the docker exporter (no name, so manifest.json's RepoTags is null).
+      # the docker exporter (no name, so manifest.json's RepoTags is null). The exporter does not
+      # create the destination directory.
+      - name: Make the save directory
+        run: mkdir -p "$RUNNER_TEMP/save"
       - name: Export the image tar (noded release)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
