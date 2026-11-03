@@ -1,20 +1,45 @@
-name: push to private GitHub docker registry
+name: push image
 
+# Builds the image (Dockerfile) once per platform on native runners and publishes
+# `ghcr.io/<owner>/ffmpeg-docker-playground:latest`, a multi-arch (amd64 + arm64) manifest list:
+# `build` pushes each platform by digest, `merge` joins them. Downstream images use it as their
+# base.
+#
+# Triggers: a push to master that can change the image (files outside the Docker build context or
+# not copied by the Dockerfile are ignored), or workflow_dispatch on master.
 on:
   push:
     branches:
       - master
+    paths-ignore:
+      - '**.md'
+      - 'sample-outputs/**'
+      - 'test-media/**'
+      - 'tests/**'
+      - 'agent/tests/**'
+      - 'agent/deploy/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/workflows/test-*.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/ffmpeg-docker-playground
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/master'
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +51,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -48,10 +75,11 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -64,6 +92,9 @@ jobs:
   merge:
     runs-on: blacksmith-4vcpu-ubuntu-2204
     needs: build
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -85,6 +116,7 @@ jobs:
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            -t ${{ env.IMAGE_NAME }}:latest \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          set -euo pipefail
+          sources=()
+          for digest in *; do sources+=("$IMAGE_NAME@sha256:$digest"); done
+          docker buildx imagetools create -t "$IMAGE_NAME:latest" "${sources[@]}"

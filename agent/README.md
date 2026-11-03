@@ -189,7 +189,7 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 | `FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS` | `300`, range 1–86400; upper bound on `exp - iat` |
 | `FFMPEG_AGENT_AUTH_SUBJECTS` | Optional comma-separated allow-list of `sub` values |
 | `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting |
-| `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`; use `0.0.0.0:8080` inside a container with loopback-only host publishing |
+| `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`. `<ip>:<port>`, or `unix:<absolute path>` for a Unix domain socket. Use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
 | `FFMPEG_AGENT_CONCURRENCY` | `1`, range 1–16 |
@@ -199,6 +199,16 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 | `FFMPEG_AGENT_JOB_TIMEOUT_SECS` | `0` (disabled), range 0–86400; optional absolute execution deadline including transfers |
 | `FFMPEG_AGENT_MAX_INPUT_BYTES` | `17179869184` (16 GiB) |
 | `FFMPEG_AGENT_MAX_OUTPUT_BYTES` | `17179869184` (16 GiB); outputs reaching the limit are rejected |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` (or lowercase) | Unset. Outbound input, output and callback requests use the proxy for their scheme unless `NO_PROXY` matches; HTTPS goes through `CONNECT` with the host name, so the proxy resolves it. FFmpeg does not inherit them |
+
+### Unix socket listener
+
+With `FFMPEG_AGENT_LISTEN=unix:<path>` the agent serves the same HTTP API on a Unix domain
+socket. At startup it replaces a socket left behind by a previous process (one that refuses
+connections); it refuses to start if the socket still accepts connections or if the path is
+not a socket. The socket is created with mode 0666: access is decided by the directory that
+holds it, and every request is authenticated anyway. The agent removes the socket when it
+exits.
 
 ### Authentication
 
