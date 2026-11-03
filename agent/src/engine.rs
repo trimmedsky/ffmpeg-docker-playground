@@ -85,7 +85,8 @@ pub fn initialize(config: Config) -> Result<(Arc<State>, Vec<JoinHandle<()>>), S
     }
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
+        // Outbound requests follow HTTPS_PROXY / HTTP_PROXY / ALL_PROXY and NO_PROXY
+        // (uppercase first), so a deployment can route them through an egress proxy.
         .connect_timeout(Duration::from_secs(5))
         .user_agent(concat!("ffmpeg-agent/", env!("CARGO_PKG_VERSION")))
         .build()

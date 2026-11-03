@@ -15,6 +15,9 @@ use std::{collections::BTreeSet, ffi::OsString, fmt};
 pub use jwt::Verified;
 
 const JWKS_FILE: &str = "FFMPEG_AGENT_AUTH_JWKS_FILE";
+/// The JWKS path a home-net-gateway host (noded) gives its container backends. Read as an
+/// alternative name for [`JWKS_FILE`]; the agent knows nothing else about that system.
+const HNG_JWKS: &str = "HNG_BACKEND_JWKS";
 const AUDIENCE: &str = "FFMPEG_AGENT_AUTH_AUDIENCE";
 const ISSUER: &str = "FFMPEG_AGENT_AUTH_ISSUER";
 const TYP: &str = "FFMPEG_AGENT_AUTH_TYP";
@@ -123,13 +126,23 @@ impl Authenticator {
             .into_iter()
             .filter(|name| get(name).is_some())
             .collect();
-        match (text(JWKS_FILE)?, text(INSECURE)?) {
-            (Some(_), Some(_)) => Err(format!("{INSECURE} cannot be combined with {JWKS_FILE}")),
+        let jwks = match (text(JWKS_FILE)?, text(HNG_JWKS)?) {
+            (Some(a), Some(b)) if a != b => {
+                return Err(format!(
+                    "{JWKS_FILE} and {HNG_JWKS} name different files; set one of them"
+                ));
+            }
+            (a, b) => a.or(b),
+        };
+        match (jwks, text(INSECURE)?) {
+            (Some(_), Some(_)) => Err(format!(
+                "{INSECURE} cannot be combined with {JWKS_FILE} or {HNG_JWKS}"
+            )),
             (None, Some(flag)) if flag != "1" => Err(format!(
                 "{INSECURE} must be exactly 1; unset it to require authentication"
             )),
             (None, insecure) if !jwt_settings.is_empty() => Err(format!(
-                "{} set without {JWKS_FILE}{}",
+                "{} set without {JWKS_FILE} or {HNG_JWKS}{}",
                 jwt_settings.join(", "),
                 if insecure.is_some() {
                     format!(" (and {INSECURE} disables authentication)")
@@ -139,7 +152,7 @@ impl Authenticator {
             )),
             (None, Some(_)) => Ok(Self::InsecureNoAuth),
             (None, None) => Err(format!(
-                "authentication is required: set {JWKS_FILE} and {AUDIENCE} \
+                "authentication is required: set {JWKS_FILE} (or {HNG_JWKS}) and {AUDIENCE} \
                  ({INSECURE}=1 disables authentication for isolated local tests only)"
             )),
             (Some(path), None) => {
@@ -356,6 +369,20 @@ mod tests {
             error(&[(JWKS_FILE, jwks), (AUDIENCE, "a"), (INSECURE, "1")])
                 .contains("cannot be combined")
         );
+        assert!(
+            error(&[(HNG_JWKS, jwks), (AUDIENCE, "a"), (INSECURE, "1")])
+                .contains("cannot be combined")
+        );
+        assert!(
+            error(&[
+                (JWKS_FILE, jwks),
+                (HNG_JWKS, "/other.json"),
+                (AUDIENCE, "a")
+            ])
+            .contains("name different files")
+        );
+        assert!(error(&[(HNG_JWKS, jwks)]).contains("FFMPEG_AGENT_AUTH_AUDIENCE is required"));
+        assert!(error(&[(HNG_JWKS, "")]).contains(HNG_JWKS));
         assert!(error(&[(JWKS_FILE, jwks)]).contains("FFMPEG_AGENT_AUTH_AUDIENCE is required"));
         for setting in JWT_SETTINGS {
             assert!(
@@ -427,6 +454,28 @@ mod tests {
         assert_eq!(verifier.policy().max_lifetime_secs, 300);
         assert_eq!(verifier.policy().issuer, None);
         assert_eq!(verifier.policy().subjects, None);
+    }
+
+    #[test]
+    fn reads_the_jwks_path_from_either_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let signer = Signer::new("k");
+        let jwks = jwks_file(dir.path(), &signer);
+        let claims = json!({"sub":"service#ffmpeg","aud":"ffmpeg","iat":NOW,"exp":NOW + 60});
+        let value = format!(
+            "Bearer {}",
+            signer.sign(&json!({"alg":"ES256","kid":"k"}), &claims)
+        );
+        for vars in [
+            vec![(HNG_JWKS, jwks.as_str()), (AUDIENCE, "ffmpeg")],
+            vec![(JWKS_FILE, &jwks), (HNG_JWKS, &jwks), (AUDIENCE, "ffmpeg")],
+        ] {
+            let auth = load(&vars).unwrap();
+            let principal = auth
+                .authenticate(&headers(&[value.as_bytes()]), NOW)
+                .unwrap();
+            assert_eq!(principal.unwrap().subject, "service#ffmpeg");
+        }
     }
 
     fn headers(values: &[&[u8]]) -> HeaderMap {

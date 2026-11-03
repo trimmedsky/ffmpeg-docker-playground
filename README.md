@@ -62,6 +62,16 @@ standard ES256 JWTs verified against a JWKS file, so any gateway, sidecar or ser
 that can mint such a token can call it. See [agent/README.md](agent/README.md)
 for the API, authentication, configuration, license, tests and a systemd/Docker unit.
 
+## Published images
+
+Each push to `master` that can change the image builds it natively for `linux/amd64` and
+`linux/arm64` (`.github/workflows/github-docker-registry.yml`) and publishes it twice:
+
+- `ghcr.io/trimmedsky/ffmpeg-docker-playground:latest`, a multi-arch image.
+- A GitHub Release `build-<run number>` with the same image per architecture as a `docker load`
+  tar and its CD signature, for running `ffmpeg-agent` under home-net-gateway's `noded`
+  (contract: [agent/README.md](agent/README.md#run-under-noded)). The newest five builds are kept.
+
 ## Testing
 
 Three CPU suites run in CI on non-master branch pushes on native AMD64 and ARM64
