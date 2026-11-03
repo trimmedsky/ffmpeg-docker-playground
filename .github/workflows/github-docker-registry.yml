@@ -1,31 +1,79 @@
-name: push to private GitHub docker registry
+name: push image
 
+# Builds the image (Dockerfile) once per platform on native runners and ships it two ways:
+#
+# - GHCR: `ghcr.io/<owner>/ffmpeg-docker-playground:latest`, a multi-arch (amd64 + arm64) manifest
+#   list (`build` pushes each platform by digest, `merge` joins them). Downstream images use it as
+#   their base.
+# - noded release (home-net-gateway docs/noded-release.md): `build` also exports the same image of
+#   its platform with BuildKit's docker exporter (`type=docker`: a plain outer tar with
+#   manifest.json, layer blobs gzip-compressed as pushed, no image name), checks that it is one
+#   untagged image and the pushed one, and uploads it as an Actions artifact. `tag` tags the commit
+#   `build-<run number>`; `sign` signs each tar with the repository's CD key (HNG's signer, vendored
+#   in third_party/hng-cd-sign) under the release name `ffmpeg-agent`, attaches the tars and their
+#   `.cd.jws` to that tag's GitHub Release, and deletes all but the newest KEEP builds. Nothing is
+#   deployed; the step summary prints the `hng release` command.
+#
+# The noded steps are written here instead of calling saiya/devkit image-push.yml: that is a
+# private repository of another owner, and this organization allows only actions/*, docker/*,
+# anthropics/* and oven-sh/setup-bun, pinned by full commit sha.
+#
+# Triggers: a push to master that can change the image (files outside the Docker build context or
+# not copied by the Dockerfile are ignored), or workflow_dispatch on master.
 on:
   push:
     branches:
       - master
+    paths-ignore:
+      - '**.md'
+      - 'sample-outputs/**'
+      - 'test-media/**'
+      - 'tests/**'
+      - 'agent/tests/**'
+      - 'agent/deploy/**'
+      - '.github/workflows/test-*.yml'
+  workflow_dispatch:
 
+# Read-only by default. `build` and `merge` write packages (GHCR); only `tag` and `sign` write
+# contents (the tag, its GitHub Release, deleting old builds), and only `sign` gets the CD key.
 permissions:
   contents: read
-  packages: write
+
+# A running build is never cancelled: a run cancelled after `tag` would leave a tag without its
+# signed Release.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/ffmpeg-docker-playground
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/master'
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         include:
+          # `arch` is the arch label of HNG's members document (`platform.arch`), which the tar's
+          # name and cd_sign.py's --arch carry.
           - platform: linux/amd64
             runner: blacksmith-4vcpu-ubuntu-2204
+            arch: x86_64-linux
           - platform: linux/arm64
             runner: blacksmith-4vcpu-ubuntu-2204-arm
+            arch: aarch64-linux
+    env:
+      SAVE_FILE: ffmpeg-agent-${{ matrix.arch }}.tar
     steps:
       - name: checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -48,10 +96,11 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -61,9 +110,64 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # The same build again on the same builder, entirely from its cache, written as the tar of
+      # the docker exporter (no name, so manifest.json's RepoTags is null).
+      - name: Export the image tar (noded release)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          outputs: type=docker,dest=${{ runner.temp }}/save/${{ env.SAVE_FILE }}
+          # The docker exporter takes no attestations.
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.platform }}
+
+      # One untagged image, under a GitHub Release asset's 2 GiB, and the very image pushed to GHCR
+      # (same layers and creation time); then the loaded image runs.
+      - name: Check the image tar
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          tar="$RUNNER_TEMP/save/$SAVE_FILE"
+          ls -l "$tar"
+          tar -xOf "$tar" manifest.json | jq -e 'length == 1 and .[0].RepoTags == null' > /dev/null \
+            || { echo "::error::$SAVE_FILE: manifest.json is not one image without tags"; exit 1; }
+          size="$(stat -c %s "$tar")"
+          if [ "$size" -gt $((2 * 1024 * 1024 * 1024)) ]; then
+            echo "::error::$SAVE_FILE is $size bytes, over a GitHub Release asset's 2 GiB"; exit 1
+          fi
+          id="$(docker load -i "$tar" | sed -n 's/^Loaded image ID: //p')"
+          [ -n "$id" ] || { echo "::error::docker load of $SAVE_FILE named no image id"; exit 1; }
+          saved="$(docker image inspect "$id" --format '{{json .RootFS.Layers}} {{.Created}}')"
+          # One platform: .Image is the config; with attestations: a map keyed by platform.
+          pushed="$(docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" --format '{{json .Image}}' \
+            | jq -r --arg p "$PLATFORM" '(if has("rootfs") then . else .[$p] end) | "\(.rootfs.diff_ids | tojson) \(.created)"')"
+          echo "saved:  $saved"
+          echo "pushed: $pushed"
+          [ "$saved" = "$pushed" ] || { echo "::error::$SAVE_FILE differs from the pushed $IMAGE_NAME@$DIGEST"; exit 1; }
+          docker run --rm --network none "$id" ffmpeg-agent --version
+          docker run --rm --network none "$id" ffmpeg -hide_banner -version
+
+      - name: Upload the image tar
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ffmpeg-agent-image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/save/${{ env.SAVE_FILE }}
+          if-no-files-found: error
+          retention-days: 2
+          # The layers are already gzip-compressed.
+          compression-level: 0
+
   merge:
     runs-on: blacksmith-4vcpu-ubuntu-2204
     needs: build
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -85,6 +189,126 @@ jobs:
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create \
-            -t ${{ env.IMAGE_NAME }}:latest \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          set -euo pipefail
+          sources=()
+          for digest in *; do sources+=("$IMAGE_NAME@sha256:$digest"); done
+          docker buildx imagetools create -t "$IMAGE_NAME:latest" "${sources[@]}"
+
+  # The release tag: build-<run number> on the commit built. Never moved: the API refuses an
+  # existing tag (HTTP 422), and the run fails.
+  tag:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Tag the commit
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: build-${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # The CD signature (home-net-gateway docs/noded-release.md「CD の署名」): each image tar signed by
+  # the vendored signer with the CD key (secret CD_SIGNING_KEY, given to this job only), then the
+  # tars and their `.cd.jws` attached to the GitHub Release of the tag.
+  sign:
+    needs: [build, tag]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      SIGNER: third_party/hng-cd-sign
+      TAG: ${{ needs.tag.outputs.tag }}
+    steps:
+      # The signer of the tag (fully qualified: a branch of the same name does not shadow it).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
+          sparse-checkout: third_party/hng-cd-sign
+          persist-credentials: false
+      # The tag still names the commit that was built, and the signer is the byte copy its
+      # SOURCE.json records (the tree hash of saiya/devkit scripts/vendor-check.py), before
+      # anything is signed.
+      - name: Tag is the built commit, the signer is the vendored copy
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          [ "$head" = "$GITHUB_SHA" ] || { echo "tag $TAG is $head, not the built $GITHUB_SHA" >&2; exit 1; }
+          want=$(jq -r .sha256 "$SIGNER/SOURCE.json")
+          got=$(cd "$SIGNER" && find . -type f ! -name SOURCE.json | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "$SIGNER: tree hash $got, SOURCE.json records $want" >&2; exit 1; }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: The signer's one dependency, pinned with hashes
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r "$SIGNER/requirements.txt"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ffmpeg-agent-image-*
+          merge-multiple: true
+          path: dist
+      # Release name `ffmpeg-agent`; the version is the run number of the tag build-<run number>.
+      - name: Sign
+        env:
+          CD_SIGNING_KEY: ${{ secrets.CD_SIGNING_KEY }}
+          VERSION: ${{ github.run_number }}
+        run: |
+          set -eu
+          for arch in x86_64-linux aarch64-linux; do
+            python3 -I "$SIGNER/cd_sign.py" --repository "$GITHUB_REPOSITORY" --kind image \
+              --name ffmpeg-agent --version "$VERSION" --commit "$GITHUB_SHA" --arch "$arch" \
+              "dist/ffmpeg-agent-$arch.tar"
+          done
+          ls -l dist
+      - name: Attach to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # No `--target`: GitHub refuses a release whose target_commitish differs from the default
+        # branch under .github/workflows/ unless the token may modify workflows, which GITHUB_TOKEN
+        # never may. Without it the release takes the existing tag (`--verify-tag`), checked above
+        # to be the built commit.
+        run: |
+          set -eu
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "$TAG" --notes "CD-signed ffmpeg-agent image for noded (home-net-gateway docs/noded-release.md)."
+          gh release upload "$TAG" dist/* --clobber
+          {
+            echo "## noded release"
+            echo
+            echo "Attached the image tars and their CD signatures (release name \`ffmpeg-agent\`, commit \`$GITHUB_SHA\`) to the GitHub Release of \`$TAG\`. Nothing is deployed. To release, on a release machine:"
+            echo
+            echo '```sh'
+            echo "hng release $GITHUB_REPOSITORY $TAG --name ffmpeg-agent --release $TAG"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Each build's Release holds two ~1.5 GB tars. Keeps the newest KEEP builds by run number and
+      # deletes the Release and the tag of every older one. Only names that are exactly
+      # `build-<digits>` are listed, so no other tag or Release can be touched. `hng release` reads a
+      # build's Release once; the fabric carries the artifacts from there. Idempotent: every run
+      # deletes only what it lists, including a tag whose Release was never made (`sign` failed).
+      # Runs after the upload, so a failed build deletes nothing.
+      - name: Delete the builds older than the newest KEEP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEEP: "5"
+        run: |
+          set -euo pipefail
+          tags=$(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/build-" --jq '.[].ref | ltrimstr("refs/tags/")')
+          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')
+          old=$(printf '%s\n%s\n' "$tags" "$releases" | { grep -E '^build-[0-9]+$' || true; } \
+            | sort -u | sort -t- -k2,2nr | tail -n +$((KEEP + 1)))
+          for t in $old; do
+            if printf '%s\n' "$releases" | grep -qx "$t"; then gh release delete "$t" --yes; fi
+            if printf '%s\n' "$tags" | grep -qx "$t"; then gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$t"; fi
+            echo "deleted $t"
+          done

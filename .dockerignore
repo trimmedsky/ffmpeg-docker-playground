@@ -6,3 +6,5 @@ tests
 
 agent/target
 agent/tests/__pycache__
+
+third_party

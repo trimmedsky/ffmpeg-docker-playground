@@ -1,8 +1,8 @@
-use crate::auth::Authenticator;
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
+use crate::{auth::Authenticator, listen::Listen};
+use std::{env, path::PathBuf, time::Duration};
 
 pub struct Config {
-    pub listen: SocketAddr,
+    pub listen: Listen,
     pub auth: Authenticator,
     pub work_dir: PathBuf,
     pub ffmpeg: String,
@@ -30,10 +30,9 @@ impl Config {
     pub fn load() -> Result<Self, String> {
         let auth = Authenticator::from_env()?;
         Ok(Self {
-            listen: env::var("FFMPEG_AGENT_LISTEN")
-                .unwrap_or_else(|_| "127.0.0.1:8080".into())
-                .parse()
-                .map_err(|_| "invalid listen address")?,
+            listen: Listen::parse(
+                &env::var("FFMPEG_AGENT_LISTEN").unwrap_or_else(|_| "127.0.0.1:8080".into()),
+            )?,
             auth,
             work_dir: env::var("FFMPEG_AGENT_WORK_DIR")
                 .map(PathBuf::from)

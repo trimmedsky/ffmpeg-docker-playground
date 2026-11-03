@@ -183,13 +183,14 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 | Environment variable | Default / meaning |
 |---|---|
 | `FFMPEG_AGENT_AUTH_JWKS_FILE` | Path of the JWKS file with the issuer's ES256 public keys. Required unless authentication is explicitly disabled |
+| `HNG_BACKEND_JWKS` | Alternative name for the JWKS path, the one a noded host sets (see [Run under noded](#run-under-noded)); if both are set they must be equal |
 | `FFMPEG_AGENT_AUTH_AUDIENCE` | Required with a JWKS file: the `aud` value that designates this agent |
 | `FFMPEG_AGENT_AUTH_ISSUER` | Optional: when set, `iss` must be present and equal |
 | `FFMPEG_AGENT_AUTH_TYP` | Optional: when set, the JOSE `typ` header must be present and equal (exact, case-sensitive) |
 | `FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS` | `300`, range 1–86400; upper bound on `exp - iat` |
 | `FFMPEG_AGENT_AUTH_SUBJECTS` | Optional comma-separated allow-list of `sub` values |
-| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting |
-| `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`; use `0.0.0.0:8080` inside a container with loopback-only host publishing |
+| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting or `HNG_BACKEND_JWKS` |
+| `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`. `<ip>:<port>`, or `unix:<absolute path>` for a Unix domain socket. Use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
 | `FFMPEG_AGENT_CONCURRENCY` | `1`, range 1–16 |
@@ -199,6 +200,16 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 | `FFMPEG_AGENT_JOB_TIMEOUT_SECS` | `0` (disabled), range 0–86400; optional absolute execution deadline including transfers |
 | `FFMPEG_AGENT_MAX_INPUT_BYTES` | `17179869184` (16 GiB) |
 | `FFMPEG_AGENT_MAX_OUTPUT_BYTES` | `17179869184` (16 GiB); outputs reaching the limit are rejected |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` (or lowercase) | Unset. Outbound input, output and callback requests use the proxy for their scheme unless `NO_PROXY` matches; HTTPS goes through `CONNECT` with the host name, so the proxy resolves it. FFmpeg does not inherit them |
+
+### Unix socket listener
+
+With `FFMPEG_AGENT_LISTEN=unix:<path>` the agent serves the same HTTP API on a Unix domain
+socket. At startup it replaces a socket left behind by a previous process (one that refuses
+connections); it refuses to start if the socket still accepts connections or if the path is
+not a socket. The socket is created with mode 0666: access is decided by the directory that
+holds it, and every request is authenticated anyway. The agent removes the socket when it
+exits.
 
 ### Authentication
 
@@ -339,6 +350,33 @@ socket into the worker. Keep host publishing on loopback or on an isolated netwo
 put a TLS-terminating gateway in front when remote access is needed. Network access
 policy belongs to the deployment; this project does not change host firewall rules or
 install a gateway.
+
+## Run under noded
+
+[home-net-gateway](https://github.com/saiya/home-net-gateway)'s `noded` can run the image as a
+container workload. Its CD (`.github/workflows/github-docker-registry.yml`) attaches each
+build's `docker load` tars (`ffmpeg-agent-x86_64-linux.tar`, `ffmpeg-agent-aarch64-linux.tar`)
+and their CD signatures to the GitHub Release of tag `build-<run number>`, under the release
+name `ffmpeg-agent`. The workload row supplies:
+
+- **Command**: `args` `["ffmpeg-agent"]` (the image's default command is unchanged).
+- **Socket**: `backend_socket` at a path in the directory noded mounts, with
+  `FFMPEG_AGENT_LISTEN=unix:<that path>`; `health_path` `/healthz`.
+- **Authentication**: noded sets `HNG_BACKEND_JWKS` to the service's JWKS file and signs
+  backend JWTs with `aud` the service and `typ` `hng-backend+jwt`. Set
+  `FFMPEG_AGENT_AUTH_AUDIENCE=<service>`, `FFMPEG_AGENT_AUTH_TYP=hng-backend+jwt` and
+  `FFMPEG_AGENT_AUTH_SUBJECTS` to the callers (`service#<caller>`) plus `service#<service>`,
+  the subject of noded's health probe.
+- **Outbound**: `HTTPS_PROXY=http://<the network's gateway address>:<egress proxy port>`, with
+  the destinations allowed in the host's egress list.
+- **Work directory**: `FFMPEG_AGENT_WORK_DIR` on a writable mount owned by the account noded
+  creates for the service (the agent needs no particular uid; it writes only there and to
+  `/tmp`), plus a small `/tmp` tmpfs and a read-only root filesystem.
+- **GPU**: `devices` (`/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`), `gpus` `"all"` and
+  `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` in `env`.
+- **Limits**: `cpus`, `memory_limit_bytes` and `pids_limit` cover FFmpeg too; size them as in
+  [Resources and cleanup](#resources-and-cleanup). Give `stop_timeout_secs` enough time for the
+  shutdown callbacks (the systemd example allows 45 s).
 
 ## License
 

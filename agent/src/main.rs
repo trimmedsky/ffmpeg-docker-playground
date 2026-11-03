@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod engine;
+mod listen;
 mod model;
 
 use axum::{
@@ -116,7 +117,7 @@ async fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Requests must carry an ES256 JWT (FFMPEG_AGENT_AUTH_JWKS_FILE, FFMPEG_AGENT_AUTH_AUDIENCE).\nSee agent/README.md for the API, limits and deployment."
+                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Listens on FFMPEG_AGENT_LISTEN (<ip>:<port> or unix:<path>). Requests must carry an ES256 JWT (FFMPEG_AGENT_AUTH_JWKS_FILE or HNG_BACKEND_JWKS, FFMPEG_AGENT_AUTH_AUDIENCE).\nSee agent/README.md for the API, limits and deployment."
             );
             return;
         }
@@ -135,10 +136,8 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let config = config::Config::load()?;
     eprintln!("ffmpeg-agent: {}", config.auth.describe());
-    let address = config.listen;
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .map_err(|_| "cannot bind listen address")?;
+    let address = config.listen.clone();
+    let listener = listen::bind(&address).await?;
     let (state, workers) = engine::initialize(config)?;
     let cancel = state.cancel.clone();
     tokio::spawn(async move {
@@ -166,9 +165,21 @@ async fn run() -> Result<(), String> {
         "ffmpeg-agent {} listening on {address}",
         env!("CARGO_PKG_VERSION")
     );
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(state.cancel.clone().cancelled_owned())
-        .await;
+    let shutdown = state.cancel.clone().cancelled_owned();
+    // `_socket` removes the Unix socket file once the server has stopped.
+    let result = match listener {
+        listen::Listener::Tcp(listener) => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+        }
+        #[cfg(unix)]
+        listen::Listener::Unix(listener, _socket) => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+        }
+    };
     state.cancel.cancel();
     for worker in workers {
         worker.await.map_err(|_| "worker terminated unexpectedly")?;
