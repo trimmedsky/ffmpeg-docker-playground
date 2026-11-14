@@ -20,9 +20,7 @@ cargo build --locked --release
 `make check` at the repository root runs the checks CI runs (`cargo fmt`, `clippy`, the
 tests and the HTTP integration suite; see the root README, "Checks before pushing").
 The checked-in toolchain and `Cargo.lock` fix the build dependencies. Native Linux
-AMD64 and ARM64 are tested in CI. The unit tests include home-net-gateway's backend JWT
-vectors (`third_party/hng-fixtures`), checked against the configuration of
-[Run under noded](#run-under-noded). The HTTP integration suite uses a deterministic
+AMD64 and ARM64 are tested in CI. The HTTP integration suite uses a deterministic
 FFmpeg substitute to exercise authentication, admission, failures, timeouts and process
 cleanup; it needs `python3` and the `openssl` command (for its throwaway JWT issuer,
 `tests/jwt_issuer.py`). `tests/e2e.py` exercises a running agent with real FFmpeg and
@@ -182,13 +180,12 @@ terminal event. Callbacks and their acknowledgements are part of the trust bound
 | Environment variable | Default / meaning |
 |---|---|
 | `FFMPEG_AGENT_AUTH_JWKS_FILE` | Path of the JWKS file with the issuer's ES256 public keys. Required unless authentication is explicitly disabled |
-| `HNG_BACKEND_JWKS` | Alternative name for the JWKS path, the one a noded host sets (see [Run under noded](#run-under-noded)); if both are set they must be equal |
 | `FFMPEG_AGENT_AUTH_AUDIENCE` | Required with a JWKS file: the `aud` value that designates this agent |
 | `FFMPEG_AGENT_AUTH_ISSUER` | Optional: when set, `iss` must be present and equal |
 | `FFMPEG_AGENT_AUTH_TYP` | Optional: when set, the JOSE `typ` header must be present and equal (exact, case-sensitive) |
 | `FFMPEG_AGENT_AUTH_MAX_LIFETIME_SECS` | `300`, range 1–86400; upper bound on `exp - iat` |
 | `FFMPEG_AGENT_AUTH_SUBJECTS` | Optional comma-separated allow-list of `sub` values |
-| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting or `HNG_BACKEND_JWKS` |
+| `FFMPEG_AGENT_INSECURE_NO_AUTH` | `1` disables authentication, for isolated local tests only; refused together with any `FFMPEG_AGENT_AUTH_*` setting |
 | `FFMPEG_AGENT_LISTEN` | `127.0.0.1:8080`. `<ip>:<port>`, or `unix:<absolute path>` for a Unix domain socket. Use `0.0.0.0:8080` inside a container with loopback-only host publishing |
 | `FFMPEG_AGENT_WORK_DIR` | OS temporary directory + `/ffmpeg-agent`; exclusive scratch directory |
 | `FFMPEG_AGENT_FFMPEG` | `ffmpeg`; executable, not a shell command |
@@ -349,33 +346,6 @@ socket into the worker. Keep host publishing on loopback or on an isolated netwo
 put a TLS-terminating gateway in front when remote access is needed. Network access
 policy belongs to the deployment; this project does not change host firewall rules or
 install a gateway.
-
-## Run under noded
-
-[home-net-gateway](https://github.com/saiya/home-net-gateway)'s `noded` can run the image as a
-container workload. Its CD (`.github/workflows/github-docker-registry.yml`) attaches each
-build's `docker load` tars (`ffmpeg-agent-x86_64-linux.tar`, `ffmpeg-agent-aarch64-linux.tar`)
-and their CD signatures to the GitHub Release of tag `build-<run number>`, under the release
-name `ffmpeg-agent`. The workload row supplies:
-
-- **Command**: `args` `["ffmpeg-agent"]` (the image's default command is unchanged).
-- **Socket**: `backend_socket` at a path in the directory noded mounts, with
-  `FFMPEG_AGENT_LISTEN=unix:<that path>`; `health_path` `/healthz`.
-- **Authentication**: noded sets `HNG_BACKEND_JWKS` to the service's JWKS file and signs
-  backend JWTs with `aud` the service and `typ` `hng-backend+jwt`. Set
-  `FFMPEG_AGENT_AUTH_AUDIENCE=<service>`, `FFMPEG_AGENT_AUTH_TYP=hng-backend+jwt` and
-  `FFMPEG_AGENT_AUTH_SUBJECTS` to the callers (`service#<caller>`) plus `service#<service>`,
-  the subject of noded's health probe.
-- **Outbound**: `HTTPS_PROXY=http://<the network's gateway address>:<egress proxy port>`, with
-  the destinations allowed in the host's egress list.
-- **Work directory**: `FFMPEG_AGENT_WORK_DIR` on a writable mount owned by the account noded
-  creates for the service (the agent needs no particular uid; it writes only there and to
-  `/tmp`), plus a small `/tmp` tmpfs and a read-only root filesystem.
-- **GPU**: `devices` (`/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`), `gpus` `"all"` and
-  `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` in `env`.
-- **Limits**: `cpus`, `memory_limit_bytes` and `pids_limit` cover FFmpeg too; size them as in
-  [Resources and cleanup](#resources-and-cleanup). Give `stop_timeout_secs` enough time for the
-  shutdown callbacks (the systemd example allows 45 s).
 
 ## License
 

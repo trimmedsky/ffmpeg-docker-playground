@@ -117,7 +117,7 @@ async fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Listens on FFMPEG_AGENT_LISTEN (<ip>:<port> or unix:<path>). Requests must carry an ES256 JWT (FFMPEG_AGENT_AUTH_JWKS_FILE or HNG_BACKEND_JWKS, FFMPEG_AGENT_AUTH_AUDIENCE).\nSee agent/README.md for the API, limits and deployment."
+                "ffmpeg-agent: stateless HTTP FFmpeg worker\nConfigure with FFMPEG_AGENT_* environment variables. Listens on FFMPEG_AGENT_LISTEN (<ip>:<port> or unix:<path>). Requests must carry an ES256 JWT (FFMPEG_AGENT_AUTH_JWKS_FILE, FFMPEG_AGENT_AUTH_AUDIENCE).\nSee agent/README.md for the API, limits and deployment."
             );
             return;
         }

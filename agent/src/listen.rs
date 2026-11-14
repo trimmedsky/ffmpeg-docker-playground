@@ -130,8 +130,8 @@ mod tests {
             Ok(Listen::Tcp("[::1]:80".parse().unwrap()))
         );
         assert_eq!(
-            Listen::parse("unix:/run/hng-backend/ffmpeg.sock"),
-            Ok(Listen::Unix("/run/hng-backend/ffmpeg.sock".into()))
+            Listen::parse("unix:/run/ffmpeg-agent/agent.sock"),
+            Ok(Listen::Unix("/run/ffmpeg-agent/agent.sock".into()))
         );
         assert_eq!(
             Listen::parse("unix:/run/a.sock").unwrap().to_string(),

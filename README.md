@@ -65,12 +65,8 @@ for the API, authentication, configuration, license, tests and a systemd/Docker 
 ## Published images
 
 Each push to `master` that can change the image builds it natively for `linux/amd64` and
-`linux/arm64` (`.github/workflows/github-docker-registry.yml`) and publishes it twice:
-
-- `ghcr.io/trimmedsky/ffmpeg-docker-playground:latest`, a multi-arch image.
-- A GitHub Release `build-<run number>` with the same image per architecture as a `docker load`
-  tar and its CD signature, for running `ffmpeg-agent` under home-net-gateway's `noded`
-  (contract: [agent/README.md](agent/README.md#run-under-noded)). The newest five builds are kept.
+`linux/arm64` (`.github/workflows/github-docker-registry.yml`) and publishes it as
+`ghcr.io/trimmedsky/ffmpeg-docker-playground:latest`, a multi-arch image.
 
 ## Testing
 
@@ -149,17 +145,14 @@ Rust version is `agent/rust-toolchain.toml`: CI installs it from that file, and
 
 Agent dependencies (`agent/Cargo.lock`) take only versions published at least 14 days ago; when
 updating, pick older versions for the ones that are younger (`cargo update -p <crate> --precise
-<version>`). saiya/devkit `scripts/release-age.py --root agent Cargo.lock` checks it; CI does
-not, because a workflow here cannot read that repository.
+<version>`).
 
-`third_party/` holds byte copies of home-net-gateway files: the CD signer
-(`third_party/hng-cd-sign`) and the backend JWT test vectors the agent's tests read
-(`third_party/hng-fixtures`). Each `SOURCE.json` records the upstream commit and the tree hash
-that `scripts/check-vendored.sh` checks (in `make check` and before signing). Re-vendor with
-saiya/devkit `scripts/vendor-check.py update <dir> <home-net-gateway checkout> <commit>`.
+This repository is public. Do not copy files, test vectors or descriptions from private
+repositories into it (see CLAUDE.md).
 
 ## Checks before pushing
 
-`make check` runs what `.github/workflows/test-agent.yml` runs: the vendored-copy and Rust version
-checks, then `cargo fmt`, `clippy`, the tests and the agent's HTTP integration suite. It needs
-Rust (rustup reads `agent/rust-toolchain.toml`), `python3`, `openssl`, `jq` and `shasum`.
+`make check` runs what `.github/workflows/test-agent.yml` runs: the check that no vendored copy
+(`SOURCE.json`) comes from a private repository, the Rust version check, then `cargo fmt`,
+`clippy`, the tests and the agent's HTTP integration suite. It needs Rust (rustup reads
+`agent/rust-toolchain.toml`), `python3`, `openssl`, `curl` and `jq`.

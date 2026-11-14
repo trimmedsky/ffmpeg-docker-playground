@@ -205,9 +205,9 @@ def job(name, mode="copy"):
 
 
 @contextlib.contextmanager
-def agent(unix_socket=False, jwks_variable="FFMPEG_AGENT_AUTH_JWKS_FILE", **overrides):
+def agent(unix_socket=False, **overrides):
     """A running agent on a free TCP port, or on `<root>/sockets/agent.sock` after a stale
-    socket was left there; the JWKS path is passed in `jwks_variable`."""
+    socket was left there."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         # The test issuer mints what the configured policy asks for.
@@ -256,7 +256,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                 port = sock.getsockname()[1]
             listen = f"127.0.0.1:{port}"
             url = f"http://127.0.0.1:{port}"
-        env = dict(BASE_ENV, **{jwks_variable: str(jwks)}, FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent",
+        env = dict(BASE_ENV, FFMPEG_AGENT_AUTH_JWKS_FILE=str(jwks), FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent",
                    FFMPEG_AGENT_LISTEN=listen,
                    FFMPEG_AGENT_WORK_DIR=str(root / "work"), FFMPEG_AGENT_FFMPEG=str(fake),
                    FFMPEG_AGENT_HEARTBEAT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="10")
@@ -272,7 +272,7 @@ pathlib.Path(sys.argv[-1]).write_bytes(source)
                     log.seek(0)
                     raise AssertionError(log.read())
                 try:
-                    authenticated = "FFMPEG_AGENT_AUTH_JWKS_FILE" in env or "HNG_BACKEND_JWKS" in env
+                    authenticated = "FFMPEG_AGENT_AUTH_JWKS_FILE" in env
                     return request(url + "/healthz", token=token if authenticated else None)[0] == 200
                 except OSError:
                     return False
@@ -312,7 +312,7 @@ def start_fails(message, **overrides):
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(BASE_ENV, FFMPEG_AGENT_LISTEN="127.0.0.1:0", FFMPEG_AGENT_WORK_DIR=str(Path(tmp) / "work"))
         env = {k: v for k, v in env.items()
-               if not k.startswith("FFMPEG_AGENT_AUTH") and k not in ("FFMPEG_AGENT_INSECURE_NO_AUTH", "HNG_BACKEND_JWKS")}
+               if not k.startswith("FFMPEG_AGENT_AUTH") and k != "FFMPEG_AGENT_INSECURE_NO_AUTH"}
         env.update({k: str(v) for k, v in overrides.items()})
         result = subprocess.run([BINARY], env=env, capture_output=True, timeout=10)
         assert result.returncode == 1 and message in result.stderr, (overrides, result.returncode, result.stderr)
@@ -335,10 +335,6 @@ with tempfile.TemporaryDirectory() as tmp:
                 FFMPEG_AGENT_INSECURE_NO_AUTH="1")
     for path, message in ((Path(tmp) / "missing.json", b"cannot open"), (broken, b"duplicate kid"), (empty, b"no keys")):
         start_fails(message, FFMPEG_AGENT_AUTH_JWKS_FILE=path, FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg-agent")
-    start_fails(b"cannot be combined", HNG_BACKEND_JWKS=jwks, FFMPEG_AGENT_AUTH_AUDIENCE="a",
-                FFMPEG_AGENT_INSECURE_NO_AUTH="1")
-    start_fails(b"name different files", HNG_BACKEND_JWKS=jwks, FFMPEG_AGENT_AUTH_JWKS_FILE=broken,
-                FFMPEG_AGENT_AUTH_AUDIENCE="a")
 print("PASS: refuses to start without, with incomplete or with contradictory authentication settings")
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -540,25 +536,24 @@ with agent(FFMPEG_AGENT_STALL_TIMEOUT_SECS="1", FFMPEG_AGENT_JOB_TIMEOUT_SECS="0
     assert terminal("long-active")["state"] == "succeeded"
     assert terminal("long-queued")["state"] == "succeeded"
 print("PASS: nested file growth, encoder progress, stall detection, queued time excluded and child cleanup")
-# As a host supervisor (noded) runs it: a Unix socket in a mounted directory, replacing a
-# stale socket of a previous run; the JWKS path in HNG_BACKEND_JWKS; the supervisor's health
-# probe (`service#<service>`) among the allowed subjects.
-with agent(unix_socket=True, jwks_variable="HNG_BACKEND_JWKS", FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg",
-           FFMPEG_AGENT_AUTH_TYP="hng-backend+jwt",
-           FFMPEG_AGENT_AUTH_SUBJECTS="service#ffmpeg,service#caller") as (process, url, token, root):
+# As a host supervisor runs it: a Unix socket in a mounted directory, replacing a stale
+# socket of a previous run; the supervisor's health probe among the allowed subjects.
+with agent(unix_socket=True, FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg",
+           FFMPEG_AGENT_AUTH_TYP="example+jwt",
+           FFMPEG_AGENT_AUTH_SUBJECTS="health-probe,caller-a") as (process, url, token, root):
     sock = root / "sockets" / "agent.sock"
     assert sock.is_socket() and stat.S_IMODE(sock.stat().st_mode) == 0o666
-    assert request(url + "/healthz", token=token.token(sub="service#ffmpeg", aud="ffmpeg"))[0] == 200
-    assert request(url + "/healthz", token=token.token(sub="service#other", aud="ffmpeg"))[0] == 401
+    assert request(url + "/healthz", token=token.token(sub="health-probe", aud="ffmpeg"))[0] == 200
+    assert request(url + "/healthz", token=token.token(sub="caller-b", aud="ffmpeg"))[0] == 401
     assert request(url + "/healthz")[0] == 401
-    submit(url, lambda: token.token(sub="service#caller", aud="ffmpeg"), job("unix-socket"))
+    submit(url, lambda: token.token(sub="caller-a", aud="ffmpeg"), job("unix-socket"))
     assert terminal("unix-socket")["state"] == "succeeded"
-    second = dict(BASE_ENV, HNG_BACKEND_JWKS=str(root / "issuer" / "jwks.json"), FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg",
+    second = dict(BASE_ENV, FFMPEG_AGENT_AUTH_JWKS_FILE=str(root / "issuer" / "jwks.json"), FFMPEG_AGENT_AUTH_AUDIENCE="ffmpeg",
                   FFMPEG_AGENT_LISTEN=f"unix:{sock}", FFMPEG_AGENT_WORK_DIR=str(root / "other-work"))
     other = subprocess.run([BINARY], env=second, capture_output=True, timeout=5)
     assert other.returncode == 1 and b"is in use" in other.stderr, other.stderr
     assert sock.is_socket(), "a live socket was replaced"
-print("PASS: Unix socket listener (mode 0666, live socket kept, removed on exit), HNG_BACKEND_JWKS, health probe subject")
+print("PASS: Unix socket listener (mode 0666, live socket kept, removed on exit), health probe subject")
 
 PROXY_URL = f"http://127.0.0.1:{PROXY.server_port}"
 with agent(HTTPS_PROXY=PROXY_URL, HTTP_PROXY=PROXY_URL, NO_PROXY="127.0.0.1") as (_, url, token, root):
