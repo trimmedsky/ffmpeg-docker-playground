@@ -572,4 +572,59 @@ mod tests {
             Err(Rejection::SubjectNotAllowed)
         );
     }
+
+    /// home-net-gateway's backend JWT vectors (`sdk/fixtures/backend.json`, vendored in
+    /// `third_party/hng-fixtures`): tokens as noded's relay signs them, checked with the policy
+    /// that README.md "Run under noded" configures (`typ` `hng-backend+jwt`, the default
+    /// lifetime). Every token the vectors accept is accepted with its `sub`, every other one is
+    /// rejected, except that the agent reads no `roles` claim: the vectors that reject only a
+    /// malformed `roles` are accepted here, as any unread claim is.
+    #[test]
+    fn agrees_with_the_noded_backend_vectors() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../third_party/hng-fixtures/backend.json"
+        );
+        let fixture: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let keys = crate::auth::jwks::parse(fixture["jwks"].to_string().as_bytes()).unwrap();
+        let p = Policy {
+            audience: fixture["audience"].as_str().unwrap().into(),
+            typ: Some("hng-backend+jwt".into()),
+            ..policy()
+        };
+        let cases = fixture["cases"].as_array().unwrap();
+        let (mut accepted, mut rejected) = (0, 0);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let token = case["token"].as_str().unwrap();
+            let result = verify(&p, token, case["now"].as_u64().unwrap(), |kid| {
+                keys.iter()
+                    .find(|key| key.kid == kid)
+                    .cloned()
+                    .ok_or(Rejection::UnknownKey)
+            });
+            let payload = URL_SAFE_NO_PAD.decode(token.split('.').nth(1).unwrap());
+            let claims: Value = serde_json::from_slice(&payload.unwrap()).unwrap();
+            match case["expect"]["sub"].as_str() {
+                Some(sub) => {
+                    assert_eq!(
+                        result,
+                        Ok(Verified {
+                            subject: sub.into()
+                        }),
+                        "{name}"
+                    );
+                    accepted += 1;
+                }
+                None if claims.get("roles").is_some() => {
+                    assert!(result.is_ok(), "{name}: {result:?}");
+                }
+                None => {
+                    assert!(result.is_err(), "{name}");
+                    rejected += 1;
+                }
+            }
+        }
+        assert!(accepted > 0 && rejected > 0, "{accepted} {rejected}");
+    }
 }

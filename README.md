@@ -142,5 +142,24 @@ Modify version number `ARG`s in `Dockerfile`, then run `docker build` and the te
 
 The base images (`FROM`) are pinned by digest, so a rebuild does not pick up a different image
 under the same tag. To move one, change its tag and digest together; the digest is the one
-`docker buildx imagetools inspect <image>:<tag>` prints for the tag (the multi-arch index). Keep
-the Rust image's version equal to `agent/rust-toolchain.toml`.
+`docker buildx imagetools inspect <image>:<tag>` prints for the tag (the multi-arch index). The
+Rust version is `agent/rust-toolchain.toml`: CI installs it from that file, and
+`scripts/check-rust-version.sh` (part of `make check`) fails while the Rust image's tag or the
+`rust-version` of `agent/Cargo.toml` (the same minor version) disagrees with it.
+
+Agent dependencies (`agent/Cargo.lock`) take only versions published at least 14 days ago; when
+updating, pick older versions for the ones that are younger (`cargo update -p <crate> --precise
+<version>`). saiya/devkit `scripts/release-age.py --root agent Cargo.lock` checks it; CI does
+not, because a workflow here cannot read that repository.
+
+`third_party/` holds byte copies of home-net-gateway files: the CD signer
+(`third_party/hng-cd-sign`) and the backend JWT test vectors the agent's tests read
+(`third_party/hng-fixtures`). Each `SOURCE.json` records the upstream commit and the tree hash
+that `scripts/check-vendored.sh` checks (in `make check` and before signing). Re-vendor with
+saiya/devkit `scripts/vendor-check.py update <dir> <home-net-gateway checkout> <commit>`.
+
+## Checks before pushing
+
+`make check` runs what `.github/workflows/test-agent.yml` runs: the vendored-copy and Rust version
+checks, then `cargo fmt`, `clippy`, the tests and the agent's HTTP integration suite. It needs
+Rust (rustup reads `agent/rust-toolchain.toml`), `python3`, `openssl`, `jq` and `shasum`.
