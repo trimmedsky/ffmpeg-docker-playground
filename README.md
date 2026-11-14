@@ -147,8 +147,12 @@ Agent dependencies (`agent/Cargo.lock`) take only versions published at least 14
 updating, pick older versions for the ones that are younger (`cargo update -p <crate> --precise
 <version>`).
 
+This repository is public. Do not copy files, test vectors or descriptions from private
+repositories into it (see CLAUDE.md).
+
 ## Checks before pushing
 
-`make check` runs what `.github/workflows/test-agent.yml` runs: the Rust version check, then
-`cargo fmt`, `clippy`, the tests and the agent's HTTP integration suite. It needs Rust (rustup
-reads `agent/rust-toolchain.toml`), `python3` and `openssl`.
+`make check` runs what `.github/workflows/test-agent.yml` runs: the check that no vendored copy
+(`SOURCE.json`) comes from a private repository, the Rust version check, then `cargo fmt`,
+`clippy`, the tests and the agent's HTTP integration suite. It needs Rust (rustup reads
+`agent/rust-toolchain.toml`), `python3`, `openssl`, `curl` and `jq`.

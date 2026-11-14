@@ -3,6 +3,7 @@
 
 .PHONY: check
 check:
+	scripts/check-public-sources.sh
 	scripts/check-rust-version.sh
 	cd agent && cargo fmt --check
 	cd agent && cargo clippy --locked --all-targets -- -D warnings
