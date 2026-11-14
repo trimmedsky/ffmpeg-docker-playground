@@ -138,5 +138,17 @@ Modify version number `ARG`s in `Dockerfile`, then run `docker build` and the te
 
 The base images (`FROM`) are pinned by digest, so a rebuild does not pick up a different image
 under the same tag. To move one, change its tag and digest together; the digest is the one
-`docker buildx imagetools inspect <image>:<tag>` prints for the tag (the multi-arch index). Keep
-the Rust image's version equal to `agent/rust-toolchain.toml`.
+`docker buildx imagetools inspect <image>:<tag>` prints for the tag (the multi-arch index). The
+Rust version is `agent/rust-toolchain.toml`: CI installs it from that file, and
+`scripts/check-rust-version.sh` (part of `make check`) fails while the Rust image's tag or the
+`rust-version` of `agent/Cargo.toml` (the same minor version) disagrees with it.
+
+Agent dependencies (`agent/Cargo.lock`) take only versions published at least 14 days ago; when
+updating, pick older versions for the ones that are younger (`cargo update -p <crate> --precise
+<version>`).
+
+## Checks before pushing
+
+`make check` runs what `.github/workflows/test-agent.yml` runs: the Rust version check, then
+`cargo fmt`, `clippy`, the tests and the agent's HTTP integration suite. It needs Rust (rustup
+reads `agent/rust-toolchain.toml`), `python3` and `openssl`.

@@ -15,13 +15,10 @@ child process; its resource use is additional to the agent's own footprint.
 ```sh
 cd agent
 cargo build --locked --release
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked
-python3 tests/integration.py target/debug/ffmpeg-agent
 ```
 
+`make check` at the repository root runs the checks CI runs (`cargo fmt`, `clippy`, the
+tests and the HTTP integration suite; see the root README, "Checks before pushing").
 The checked-in toolchain and `Cargo.lock` fix the build dependencies. Native Linux
 AMD64 and ARM64 are tested in CI. The HTTP integration suite uses a deterministic
 FFmpeg substitute to exercise authentication, admission, failures, timeouts and process
