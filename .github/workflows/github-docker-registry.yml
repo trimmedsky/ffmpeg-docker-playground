@@ -31,6 +31,9 @@ on:
       - 'tests/**'
       - 'agent/tests/**'
       - 'agent/deploy/**'
+      - 'third_party/**'
+      - 'scripts/**'
+      - 'Makefile'
       - '.github/workflows/test-*.yml'
   workflow_dispatch:
 
@@ -235,19 +238,18 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: refs/tags/${{ needs.tag.outputs.tag }}
-          sparse-checkout: third_party/hng-cd-sign
+          sparse-checkout: |
+            third_party/hng-cd-sign
+            scripts
           persist-credentials: false
       # The tag still names the commit that was built, and the signer is the byte copy its
-      # SOURCE.json records (the tree hash of saiya/devkit scripts/vendor-check.py), before
-      # anything is signed.
+      # SOURCE.json records, before anything is signed.
       - name: Tag is the built commit, the signer is the vendored copy
         run: |
           set -euo pipefail
           head=$(git rev-parse HEAD)
           [ "$head" = "$GITHUB_SHA" ] || { echo "tag $TAG is $head, not the built $GITHUB_SHA" >&2; exit 1; }
-          want=$(jq -r .sha256 "$SIGNER/SOURCE.json")
-          got=$(cd "$SIGNER" && find . -type f ! -name SOURCE.json | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
-          [ "$got" = "$want" ] || { echo "$SIGNER: tree hash $got, SOURCE.json records $want" >&2; exit 1; }
+          scripts/check-vendored.sh "$SIGNER"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"

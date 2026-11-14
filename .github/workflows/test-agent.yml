@@ -4,10 +4,18 @@ on:
     branches: [master]
     paths:
       - 'agent/**'
+      - 'third_party/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - 'Dockerfile'
       - '.github/workflows/test-agent.yml'
   pull_request:
     paths:
       - 'agent/**'
+      - 'third_party/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - 'Dockerfile'
       - '.github/workflows/test-agent.yml'
 permissions:
   contents: read
@@ -21,15 +29,10 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        working-directory: agent
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # The toolchain, profile and components agent/rust-toolchain.toml names.
       - name: Set up Rust
-        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
-      - run: cargo build --locked
-      - run: python3 tests/integration.py target/debug/ffmpeg-agent
+        working-directory: agent
+        run: rustup toolchain install --no-self-update
+      - run: make check

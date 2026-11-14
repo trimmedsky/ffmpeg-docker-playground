@@ -15,15 +15,14 @@ child process; its resource use is additional to the agent's own footprint.
 ```sh
 cd agent
 cargo build --locked --release
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked
-python3 tests/integration.py target/debug/ffmpeg-agent
 ```
 
+`make check` at the repository root runs the checks CI runs (`cargo fmt`, `clippy`, the
+tests and the HTTP integration suite; see the root README, "Checks before pushing").
 The checked-in toolchain and `Cargo.lock` fix the build dependencies. Native Linux
-AMD64 and ARM64 are tested in CI. The HTTP integration suite uses a deterministic
+AMD64 and ARM64 are tested in CI. The unit tests include home-net-gateway's backend JWT
+vectors (`third_party/hng-fixtures`), checked against the configuration of
+[Run under noded](#run-under-noded). The HTTP integration suite uses a deterministic
 FFmpeg substitute to exercise authentication, admission, failures, timeouts and process
 cleanup; it needs `python3` and the `openssl` command (for its throwaway JWT issuer,
 `tests/jwt_issuer.py`). `tests/e2e.py` exercises a running agent with real FFmpeg and

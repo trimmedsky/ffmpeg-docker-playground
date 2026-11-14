@@ -1,0 +1,866 @@
+{
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "x": "nMXRGpJ-0VeCOU0UDKjFeOYqW0X5zAf9a3IjyQkv7KE",
+        "y": "tyjmsjl5Gopg4rezl8GdQAOX2nqMBCS8UMZINcZtBuo",
+        "crv": "P-256",
+        "alg": "ES256",
+        "kid": "interop"
+      }
+    ]
+  },
+  "audience": "local-ai",
+  "max_lifetime_secs": 300,
+  "max_roles": 32,
+  "cases": [
+    {
+      "name": "connector-issued 60 second token",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjB9.Cq7fnjDyUBt0c-ev-R2_eEqZSOQqMDNiSwC4WYHzAsb3lMP3Kh4lc-cHULoGMnqtiI8xJ-aiCWRmomMfzpQ4_A",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": []
+      }
+    },
+    {
+      "name": "lifetime exactly at the maximum",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEzMDB9.s7SgvcBEa4LR95EM9ueUD__FMZWezLon1tnkQg6xppj8j5OlGiCJOR-WtFba7PxYgqkDhzGFDgX69MJVHblBmA",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": []
+      }
+    },
+    {
+      "name": "lifetime one second above the maximum",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEzMDF9.fYW2IMHIwubgU54puertBrdTbLh_pKnhE7y0oiMKbuUu9mAAAjIxZqLeJAeUbByBGDwUYxmJZVnCKlt8SvxWqQ",
+      "expect": null
+    },
+    {
+      "name": "far-future expiry",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjYwNTgwMH0.srswq0h_s59VbKMhS0vPHLHDArm4tS65QHIeLi0KLb8I48YAvyPEjyECWEfj_YD7lwldtR-wN7f8T_ZjLB5Mhg",
+      "expect": null
+    },
+    {
+      "name": "maximum lifetime with iat inside the clock skew",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDE2LCJleHAiOjEzMTZ9.JS2JtAxuVZyo0fOp5UZIGHQbGc92sY18V331TD1h5MB_gRRGxpcSnT5jaCRfWe98EarlmXbBA_F6npiMAkXqxg",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": []
+      }
+    },
+    {
+      "name": "iat beyond the clock skew",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDE3LCJleHAiOjEwNzd9.UK-fc3D1--TLpzM7WsTjydPuxsSR6TQAqKEnzJWdRn2Q74OoWrFlzMdpp0zFXxUmmALGvj6-dD2Rd_B4ZLxCVQ",
+      "expect": null
+    },
+    {
+      "name": "expired at now",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwMDF9.xlSR1m4f_Hwbs_VRTAC9QOoARYTEMqu4x1IVYFtIfl11r5wtOt-GbPGxhoezHhR3Pdto4gO9X83Y0FESp_gGmA",
+      "expect": null
+    },
+    {
+      "name": "iat equal to exp",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwMDB9.pRDGDAOmPtrREQ5vD_Kw8p4guMydPVMM40q51ObHuPNoCm7Lolfz-83LE-GDch3qfCz4_umrxEUOvuvolU8BPw",
+      "expect": null
+    },
+    {
+      "name": "another backend audience",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImJsb2Itc3RvcmFnZSIsImlhdCI6MTAwMCwiZXhwIjoxMDYwfQ.J0MgVsFkpHmMx5Thsu2cgQWqDHLo_-SB_lQROM69VaFv6hG0uiXHNWZenRV7zCdTfn42fVrQ1A4LVFKWIjA4pQ",
+      "expect": null
+    },
+    {
+      "name": "roles claim of an opted-in service",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInVuc2FmZSIsIk9wc18yLWIiXX0.kIwPZCZPWmZdSdYt3z9kE1XCHTbGC9pMggpsX2Dha68eaouQVzoyZlTlS5u1EZUpEfGjx610pwGx8LhHfN2ZAg",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": [
+          "unsafe",
+          "Ops_2-b"
+        ]
+      }
+    },
+    {
+      "name": "empty roles claim",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbXX0.9B02K0YxQgres37Hy6GxnzZriTp1tf55lFhYz53uroR9wlSeNsfL3jIO1uyJA2SQYDgJYlMVl-IbF0lSRf2MQQ",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": []
+      }
+    },
+    {
+      "name": "maximum number of roles",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInIwIiwicjEiLCJyMiIsInIzIiwicjQiLCJyNSIsInI2IiwicjciLCJyOCIsInI5IiwicjEwIiwicjExIiwicjEyIiwicjEzIiwicjE0IiwicjE1IiwicjE2IiwicjE3IiwicjE4IiwicjE5IiwicjIwIiwicjIxIiwicjIyIiwicjIzIiwicjI0IiwicjI1IiwicjI2IiwicjI3IiwicjI4IiwicjI5IiwicjMwIiwicjMxIl19.TBK4oa7Ysk9Vhaz97MlO8zaFQUiluXhce6ocYbbH-vZsEjXav1V6gWZ9S3LcyFXsbtGIxb2WEYa5Yj58Rddxfg",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": [
+          "r0",
+          "r1",
+          "r2",
+          "r3",
+          "r4",
+          "r5",
+          "r6",
+          "r7",
+          "r8",
+          "r9",
+          "r10",
+          "r11",
+          "r12",
+          "r13",
+          "r14",
+          "r15",
+          "r16",
+          "r17",
+          "r18",
+          "r19",
+          "r20",
+          "r21",
+          "r22",
+          "r23",
+          "r24",
+          "r25",
+          "r26",
+          "r27",
+          "r28",
+          "r29",
+          "r30",
+          "r31"
+        ]
+      }
+    },
+    {
+      "name": "maximum role name length",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiXX0.JgTFEZJPge1FZ2KIxmCICHA7e9TcmQqsbFwByLJVNt7SesSYwLUljypSYConjwax531CEDcXT5f-tQvix4R6sA",
+      "expect": {
+        "sub": "service#monitor",
+        "name": "Monitor",
+        "roles": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
+      }
+    },
+    {
+      "name": "one role above the maximum count",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInIwIiwicjEiLCJyMiIsInIzIiwicjQiLCJyNSIsInI2IiwicjciLCJyOCIsInI5IiwicjEwIiwicjExIiwicjEyIiwicjEzIiwicjE0IiwicjE1IiwicjE2IiwicjE3IiwicjE4IiwicjE5IiwicjIwIiwicjIxIiwicjIyIiwicjIzIiwicjI0IiwicjI1IiwicjI2IiwicjI3IiwicjI4IiwicjI5IiwicjMwIiwicjMxIiwicjMyIl19.giczwBHKW4aSdKrsIqVw4iL400pgkckbocdpzfigQEkiy5xaOfghIwVbmxFfB2TQ0TxKzlqfpuqTDhVoIA8K3A",
+      "expect": null
+    },
+    {
+      "name": "role name above the maximum length",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4Il19.bEA1cyYn1x-SHVnuV1pMYRFPqG33KnhaC2gxS9rNg-LBXBRo42EGSJBymvtzWl4gtYjEKz9QJBaLbmiT1_NjBQ",
+      "expect": null
+    },
+    {
+      "name": "null roles claim",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpudWxsfQ.sKaMyx9tQdmeKiydQpa5F7F5ETFSRPCizN5DPAgorcw-Vi_gG7cNqCZHs_pB-qg_gCyvCuxX0ImfzOXO4C38Yg",
+      "expect": null
+    },
+    {
+      "name": "roles claim that is a string",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjoidW5zYWZlIn0.IDfofP3OefLIFJW3CfjkLCcwdPE_NTdAMzms2_kqib-WJpgbgFY0R0MpGW2AVmrFENzvMmscXdh5AaJzOVncFQ",
+      "expect": null
+    },
+    {
+      "name": "role that is not a string",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbMV19.X2FD1QyaTjjJsqwIrrDi_MfK60SyEBgUvoouH0rKxhPaYHmF-Cop3p_rLPl8URqCHPOHmE-b3-8ZSdbyLr2nDg",
+      "expect": null
+    },
+    {
+      "name": "empty role name",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbIiJdfQ.CqwnT5PZ1mM3W_JAseAA-leW24I4kSd4GnDnJ66Go2eWNEy8w9HmK3X7O6pIzGJ8OIuLSvVYK5cF-zdhZDEH-g",
+      "expect": null
+    },
+    {
+      "name": "role name with a space",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInVuIHNhZmUiXX0.HiBxD7_kkgY4rjCfJ5OJaiAgnOqNDskbODaRALRxW3Wgu6AyplPNa_h9wL5UNPNLmRLy2LKEgBRcd8bN2SiFzQ",
+      "expect": null
+    },
+    {
+      "name": "role name with a non-ASCII letter",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInVuc8OkZmUiXX0.Nx3IA7xVU-0GqX1xacMqWXT_orTVjqQ9axqDe-WHDeDcdm1SujM-zrJh4KTWRJCzZYlbqe9ySM8qjnQeKX2RTA",
+      "expect": null
+    },
+    {
+      "name": "role name with a trailing newline",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInVuc2FmZVxuIl19.EdMTDUICX8bKQGRYhXVBqS1Vd3LAm7TbKl_NdkhEYQpqTSaDZ6QWPrYv-hIEL6EHcAaU6tbj0FG_wtpnpKwf1g",
+      "expect": null
+    },
+    {
+      "name": "duplicate role",
+      "now": 1001,
+      "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImhuZy1iYWNrZW5kK2p3dCIsImtpZCI6ImludGVyb3AifQ.eyJzdWIiOiJzZXJ2aWNlI21vbml0b3IiLCJuYW1lIjoiTW9uaXRvciIsImF1ZCI6ImxvY2FsLWFpIiwiaWF0IjoxMDAwLCJleHAiOjEwNjAsInJvbGVzIjpbInVuc2FmZSIsInVuc2FmZSJdfQ.P_gpm_uWipCvRusyZ3CRaLcv1ZlBA0mcVCHuYIecJFF9ev2b2_iwlT6bYApMIa37I7XP7hkYYRGJ6CpZDxU9xQ",
+      "expect": null
+    }
+  ],
+  "max_unix_path": 100,
+  "connector_urls": [
+    {
+      "url": "http://connector.local:18080",
+      "expect": {
+        "http": {
+          "host": "connector.local",
+          "port": 18080
+        }
+      }
+    },
+    {
+      "url": "http://connector.local:18080/",
+      "expect": {
+        "http": {
+          "host": "connector.local",
+          "port": 18080
+        }
+      }
+    },
+    {
+      "url": "http://127.0.0.1:18081",
+      "expect": {
+        "http": {
+          "host": "127.0.0.1",
+          "port": 18081
+        }
+      }
+    },
+    {
+      "url": "http://connector.local",
+      "expect": {
+        "http": {
+          "host": "connector.local",
+          "port": 80
+        }
+      }
+    },
+    {
+      "url": "http://[::1]:18080",
+      "expect": {
+        "http": {
+          "host": "::1",
+          "port": 18080
+        }
+      }
+    },
+    {
+      "url": "http://host-1.example:65535",
+      "expect": {
+        "http": {
+          "host": "host-1.example",
+          "port": 65535
+        }
+      }
+    },
+    {
+      "url": "unix:/run/home-net-gateway-callers/smss/connector.sock",
+      "expect": {
+        "unix": "/run/home-net-gateway-callers/smss/connector.sock"
+      }
+    },
+    {
+      "url": "unix:/run/a_b@c+d-e/f.sock",
+      "expect": {
+        "unix": "/run/a_b@c+d-e/f.sock"
+      }
+    },
+    {
+      "url": "unix:/run/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expect": {
+        "unix": "/run/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "url": "unix:/run/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expect": null
+    },
+    {
+      "url": "",
+      "expect": null
+    },
+    {
+      "url": "connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "https://connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "HTTP://connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "http://Connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "http://u@connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:18080/x",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:18080//",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:18080?x",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:18080#x",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:0",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:65536",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:180800",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:+1",
+      "expect": null
+    },
+    {
+      "url": "http://:18080",
+      "expect": null
+    },
+    {
+      "url": "http:// connector.local:18080",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:18080 ",
+      "expect": null
+    },
+    {
+      "url": "http://connector_local:18080",
+      "expect": null
+    },
+    {
+      "url": "http://localhost:18080",
+      "expect": {
+        "http": {
+          "host": "localhost",
+          "port": 18080
+        }
+      }
+    },
+    {
+      "url": "http://0.0.0.0:80",
+      "expect": {
+        "http": {
+          "host": "0.0.0.0",
+          "port": 80
+        }
+      }
+    },
+    {
+      "url": "http://255.255.255.255:80",
+      "expect": {
+        "http": {
+          "host": "255.255.255.255",
+          "port": 80
+        }
+      }
+    },
+    {
+      "url": "http://10.254.30.2:8080",
+      "expect": {
+        "http": {
+          "host": "10.254.30.2",
+          "port": 8080
+        }
+      }
+    },
+    {
+      "url": "http://a1.b-2.c:80",
+      "expect": {
+        "http": {
+          "host": "a1.b-2.c",
+          "port": 80
+        }
+      }
+    },
+    {
+      "url": "http://127.1:80",
+      "expect": null
+    },
+    {
+      "url": "http://127.0.1:80",
+      "expect": null
+    },
+    {
+      "url": "http://2130706433:80",
+      "expect": null
+    },
+    {
+      "url": "http://0x7f.1:80",
+      "expect": null
+    },
+    {
+      "url": "http://0x7f000001:80",
+      "expect": null
+    },
+    {
+      "url": "http://127.0.0.0x1:80",
+      "expect": null
+    },
+    {
+      "url": "http://0177.0.0.1:80",
+      "expect": null
+    },
+    {
+      "url": "http://127.0.0.01:80",
+      "expect": null
+    },
+    {
+      "url": "http://127.0.0.256:80",
+      "expect": null
+    },
+    {
+      "url": "http://1.2.3.4.5:80",
+      "expect": null
+    },
+    {
+      "url": "http://127.0.0.1.:80",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local.:80",
+      "expect": null
+    },
+    {
+      "url": "http://.connector.local:80",
+      "expect": null
+    },
+    {
+      "url": "http://connector..local:80",
+      "expect": null
+    },
+    {
+      "url": "http://host.0x7f:80",
+      "expect": null
+    },
+    {
+      "url": "http://host.123:80",
+      "expect": null
+    },
+    {
+      "url": "http://1host:80",
+      "expect": null
+    },
+    {
+      "url": "http://[::1",
+      "expect": null
+    },
+    {
+      "url": "http://[]:18080",
+      "expect": null
+    },
+    {
+      "url": "http://[FE80::1]:18080",
+      "expect": null
+    },
+    {
+      "url": "http://[::1]x",
+      "expect": null
+    },
+    {
+      "url": "http://[::ffff:1.2.3.4]:80",
+      "expect": {
+        "http": {
+          "host": "::ffff:1.2.3.4",
+          "port": 80
+        }
+      }
+    },
+    {
+      "url": "http://[1.2.3.4]:80",
+      "expect": null
+    },
+    {
+      "url": "http://[:]:80",
+      "expect": null
+    },
+    {
+      "url": "http://[1::2::3]:80",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:018080",
+      "expect": null
+    },
+    {
+      "url": "http://connector.local:00080",
+      "expect": null
+    },
+    {
+      "url": "unix:",
+      "expect": null
+    },
+    {
+      "url": "unix:/",
+      "expect": null
+    },
+    {
+      "url": "unix:run/x.sock",
+      "expect": null
+    },
+    {
+      "url": "unix://run/x.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run//x.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/./x.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/../x.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/x/",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/x y.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/xé.sock",
+      "expect": null
+    },
+    {
+      "url": "unix:/run/x.sock?y",
+      "expect": null
+    },
+    {
+      "url": "UNIX:/run/x.sock",
+      "expect": null
+    }
+  ],
+  "relay_targets": [
+    {
+      "service": "blob-storage",
+      "path": "/v1/x?y=1",
+      "expect": "/services/blob-storage/v1/x?y=1"
+    },
+    {
+      "service": "blob",
+      "path": "/",
+      "expect": "/services/blob/"
+    },
+    {
+      "service": "A_b-9",
+      "path": "/x",
+      "expect": "/services/A_b-9/x"
+    },
+    {
+      "service": "blob",
+      "path": "/a//b",
+      "expect": "/services/blob/a//b"
+    },
+    {
+      "service": "blob",
+      "path": "/.well-known/x",
+      "expect": "/services/blob/.well-known/x"
+    },
+    {
+      "service": "blob",
+      "path": "/...",
+      "expect": "/services/blob/..."
+    },
+    {
+      "service": "blob",
+      "path": "/a..b/x.",
+      "expect": "/services/blob/a..b/x."
+    },
+    {
+      "service": "blob",
+      "path": "/%2e%2e%2e",
+      "expect": "/services/blob/%2e%2e%2e"
+    },
+    {
+      "service": "blob",
+      "path": "/x?p=../y",
+      "expect": "/services/blob/x?p=../y"
+    },
+    {
+      "service": "blob",
+      "path": "/x?/../y",
+      "expect": "/services/blob/x?/../y"
+    },
+    {
+      "service": "blob",
+      "path": "/x?a\\b",
+      "expect": "/services/blob/x?a\\b"
+    },
+    {
+      "service": "blob",
+      "path": "/a%20b!$&'()*+,;=:@~",
+      "expect": "/services/blob/a%20b!$&'()*+,;=:@~"
+    },
+    {
+      "service": "",
+      "path": "/x",
+      "expect": null
+    },
+    {
+      "service": "blob storage",
+      "path": "/x",
+      "expect": null
+    },
+    {
+      "service": "blob/x",
+      "path": "/x",
+      "expect": null
+    },
+    {
+      "service": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "path": "/x",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "x",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "//x",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x#y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x\r\nHost: evil",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/é",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x",
+      "expect": null
+    },
+    {
+      "service": "blob-storage",
+      "path": "/../mail/x",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/..",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/.",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/.",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/./y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/../y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/..?y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/.?y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/%2e%2e/mail",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/%2E%2E/mail",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/%2e%2E/mail",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/.%2e/mail",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/%2e./mail",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/%2e",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/x/%2E/y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "/a\\b",
+      "expect": null
+    },
+    {
+      "service": "blob-storage",
+      "path": "/x\\..\\..\\mail\\y",
+      "expect": null
+    },
+    {
+      "service": "blob",
+      "path": "\\x",
+      "expect": null
+    }
+  ],
+  "service_keys": {
+    "public": {
+      "x": "5PekR_Jb2tTbHgIEE2BPzHN6HNsqhEbsKOFEJLrAapY",
+      "y": "dhRiXd7XzbAoePPK7pibWirAGde_Ks2z9EPqi1UWF2c"
+    },
+    "accept": [
+      {
+        "name": "PKCS#8 DER",
+        "base64": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgV0kbOjo8RH8cNvBQXpwfUylFSmetEgM3BQXJ4LqgVSWhRANCAATk96RH8lva1NseAgQTYE/Mc3oc2yqERuwo4UQkusBqlnYUYl3e182wKHjzyu6Ym1oqwBnXvyrNs/RD6otVFhdn"
+      },
+      {
+        "name": "PKCS#8 PEM, LF",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbgotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+      },
+      {
+        "name": "PKCS#8 PEM, CRLF",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tDQpNSUdIQWdFQU1CTUdCeXFHU000OUFnRUdDQ3FHU000OUF3RUhCRzB3YXdJQkFRUWdWMGtiT2pvOFJIOGNOdkJRDQpYcHdmVXlsRlNtZXRFZ00zQlFYSjRMcWdWU1doUkFOQ0FBVGs5NlJIOGx2YTFOc2VBZ1FUWUUvTWMzb2MyeXFFDQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbg0KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQ0K"
+      },
+      {
+        "name": "PKCS#8 PEM without the final newline",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbgotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0t"
+      }
+    ],
+    "reject": [
+      {
+        "name": "empty file",
+        "base64": ""
+      },
+      {
+        "name": "SEC1 DER",
+        "base64": "MHcCAQEEIFdJGzo6PER/HDbwUF6cH1MpRUpnrRIDNwUFyeC6oFUloAoGCCqGSM49AwEHoUQDQgAE5PekR/Jb2tTbHgIEE2BPzHN6HNsqhEbsKOFEJLrAapZ2FGJd3tfNsCh488rumJtaKsAZ178qzbP0Q+qLVRYXZw=="
+      },
+      {
+        "name": "SEC1 PEM (EC PRIVATE KEY)",
+        "base64": "LS0tLS1CRUdJTiBFQyBQUklWQVRFIEtFWS0tLS0tCk1IY0NBUUVFSUZkSkd6bzZQRVIvSERid1VGNmNIMU1wUlVwbnJSSUROd1VGeWVDNm9GVWxvQW9HQ0NxR1NNNDkKQXdFSG9VUURRZ0FFNVBla1IvSmIydFRiSGdJRUUyQlB6SE42SE5zcWhFYnNLT0ZFSkxyQWFwWjJGR0pkM3RmTgpzQ2g0ODhydW1KdGFLc0FaMTc4cXpiUDBRK3FMVlJZWFp3PT0KLS0tLS1FTkQgRUMgUFJJVkFURSBLRVktLS0tLQo="
+      },
+      {
+        "name": "public key PEM",
+        "base64": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFNVBla1IvSmIydFRiSGdJRUUyQlB6SE42SE5zcQpoRWJzS09GRUpMckFhcFoyRkdKZDN0Zk5zQ2g0ODhydW1KdGFLc0FaMTc4cXpiUDBRK3FMVlJZWFp3PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
+      },
+      {
+        "name": "P-384 PKCS#8 PEM",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JRzJBZ0VBTUJBR0J5cUdTTTQ5QWdFR0JTdUJCQUFpQklHZU1JR2JBZ0VCQkRBUFpQc2VTa2UrNyt5THVKcXkKbGt3c3ljWHFDcldwRWwwWGFtbTd2QWF0bEZ3ZzNnTGs5cmYvaGM2ZzFaRlFsZ2FoWkFOaUFBU29YRnhPc2ZJagpFK3N1L0szaUtsRVR6WEVaSEpOM3k4UlFvWnBza0NDRzY3THlDTzZidlZKeks2SFI0RUpsdEFLL0tOeFVvSVg2CkZURWw3dTJWcEpiekNkZmUxSXRmdjJUTVQwOGx1bytOamhTeHdEWlFtdUtiYTBpRGNWQjNlQlU9Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K"
+      },
+      {
+        "name": "PKCS#8 PEM after a space",
+        "base64": "IC0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLQpNSUdIQWdFQU1CTUdCeXFHU000OUFnRUdDQ3FHU000OUF3RUhCRzB3YXdJQkFRUWdWMGtiT2pvOFJIOGNOdkJRClhwd2ZVeWxGU21ldEVnTTNCUVhKNExxZ1ZTV2hSQU5DQUFUazk2Ukg4bHZhMU5zZUFnUVRZRS9NYzNvYzJ5cUUKUnV3bzRVUWt1c0JxbG5ZVVlsM2UxODJ3S0hqenl1NlltMW9xd0JuWHZ5ck5zL1JENm90VkZoZG4KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo="
+      },
+      {
+        "name": "PKCS#8 PEM after a UTF-8 BOM",
+        "base64": "77u/LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbgotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+      },
+      {
+        "name": "PKCS#8 PEM without the END line",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbg=="
+      },
+      {
+        "name": "PKCS#8 PEM with the END line of another label",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbgotLS0tLUVORCBFQyBQUklWQVRFIEtFWS0tLS0tCg=="
+      },
+      {
+        "name": "PKCS#8 PEM with a non-base64 body",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCiFJR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ1Ywa2JPam84Ukg4Y052QlEKWHB3ZlV5bEZTbWV0RWdNM0JRWEo0THFnVlNXaFJBTkNBQVRrOTZSSDhsdmExTnNlQWdRVFlFL01jM29jMnlxRQpSdXdvNFVRa3VzQnFsbllVWWwzZTE4MndLSGp6eXU2WW0xb3F3Qm5YdnlyTnMvUkQ2b3RWRmhkbgotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg=="
+      },
+      {
+        "name": "PKCS#8 PEM without its first body line",
+        "base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tClhwd2ZVeWxGU21ldEVnTTNCUVhKNExxZ1ZTV2hSQU5DQUFUazk2Ukg4bHZhMU5zZUFnUVRZRS9NYzNvYzJ5cUUKUnV3bzRVUWt1c0JxbG5ZVVlsM2UxODJ3S0hqenl1NlltMW9xd0JuWHZ5ck5zL1JENm90VkZoZG4KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo="
+      }
+    ]
+  }
+}
