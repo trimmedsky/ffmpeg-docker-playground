@@ -8,6 +8,7 @@ use reqwest::{Client, Method};
 use std::{
     collections::{HashMap, HashSet},
     fs::OpenOptions,
+    os::unix::process::ExitStatusExt,
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -203,9 +204,9 @@ async fn worker(state: Arc<State>, rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Acc
         touch(active);
         let result = tokio::select! {
             biased;
-            _ = state.cancel.cancelled() => Err("agent shutting down"),
-            _ = tokio::time::sleep(state.config.job_timeout), if !state.config.job_timeout.is_zero() => Err("job deadline exceeded"),
-            _ = stalled(&state, active) => Err("job progress stalled"),
+            _ = state.cancel.cancelled() => Err("agent shutting down".to_owned()),
+            _ = tokio::time::sleep(state.config.job_timeout), if !state.config.job_timeout.is_zero() => Err("job deadline exceeded".to_owned()),
+            _ = stalled(&state, active) => Err("job progress stalled".to_owned()),
             result = execute(&state, active) => result,
         };
         accepted.heartbeat.abort();
@@ -217,7 +218,7 @@ async fn worker(state: Arc<State>, rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Acc
             } else {
                 "failed"
             };
-            progress.outcome.error = result.err().map(str::to_owned);
+            progress.outcome.error = result.err();
         }
         if !notify(&state, active, true).await {
             eprintln!("terminal callback not acknowledged; caller must recover by timeout");
@@ -320,7 +321,9 @@ async fn read_progress(
     }
 }
 
-async fn execute(state: &State, active: &Active) -> Result<(), &'static str> {
+/// A failure names the step and what was observed there (an HTTP status, an exit code), so the
+/// caller can tell why without the log.
+async fn execute(state: &State, active: &Active) -> Result<(), String> {
     let dir = tempfile::Builder::new()
         .prefix("job-")
         .tempdir_in(&state.config.work_dir)
@@ -397,7 +400,11 @@ async fn execute(state: &State, active: &Active) -> Result<(), &'static str> {
         .map_err(|_| "FFmpeg process I/O failed")?;
     active.progress.lock().unwrap().outcome.ffmpeg_exit_code = status.code();
     if !status.success() {
-        return Err("FFmpeg exited unsuccessfully");
+        return Err(match (status.code(), status.signal()) {
+            (Some(code), _) => format!("FFmpeg exited with code {code}"),
+            (None, Some(signal)) => format!("FFmpeg was killed by signal {signal}"),
+            (None, None) => "FFmpeg exited unsuccessfully".to_owned(),
+        });
     }
     let size = tokio::fs::metadata(&output)
         .await
@@ -405,7 +412,7 @@ async fn execute(state: &State, active: &Active) -> Result<(), &'static str> {
         .len();
     // -fs may stop an encode with exit code 0, so do not upload a truncated result.
     if size == 0 || size >= state.config.max_output {
-        return Err("output is empty or reached byte limit");
+        return Err("output is empty or reached byte limit".to_owned());
     }
     phase(active, "uploading");
     retry_transfer(&active.job.output, || upload(state, active, &output, size)).await?;
@@ -416,9 +423,13 @@ fn retry_status(status: reqwest::StatusCode) -> bool {
     status.is_server_error() || matches!(status.as_u16(), 408 | 429)
 }
 
-type TransferResult = Result<(), (&'static str, bool)>;
+type TransferResult = Result<(), (String, bool)>;
 
-async fn retry_transfer<F, Fut>(endpoint: &Endpoint, mut operation: F) -> Result<(), &'static str>
+fn failed(message: &str, retryable: bool) -> (String, bool) {
+    (message.to_owned(), retryable)
+}
+
+async fn retry_transfer<F, Fut>(endpoint: &Endpoint, mut operation: F) -> Result<(), String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = TransferResult>,
@@ -445,10 +456,10 @@ async fn download(state: &State, active: &Active, input: &std::path::Path) -> Tr
     let mut response = request(state, Method::GET, &active.job.input)
         .send()
         .await
-        .map_err(|_| ("input GET failed", true))?;
+        .map_err(|_| failed("input GET failed", true))?;
     if !response.status().is_success() {
         return Err((
-            "input GET returned non-success status",
+            format!("input GET returned HTTP {}", response.status().as_u16()),
             retry_status(response.status()),
         ));
     }
@@ -456,33 +467,33 @@ async fn download(state: &State, active: &Active, input: &std::path::Path) -> Tr
         .content_length()
         .is_some_and(|n| n > state.config.max_input)
     {
-        return Err(("input exceeds byte limit", false));
+        return Err(failed("input exceeds byte limit", false));
     }
     let mut file = tokio::fs::File::create(input)
         .await
-        .map_err(|_| ("cannot create input file", false))?;
+        .map_err(|_| failed("cannot create input file", false))?;
     let mut count = 0u64;
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| ("input download interrupted", true))?
+        .map_err(|_| failed("input download interrupted", true))?
     {
         count = count
             .checked_add(chunk.len() as u64)
-            .ok_or(("input exceeds byte limit", false))?;
+            .ok_or_else(|| failed("input exceeds byte limit", false))?;
         if count > state.config.max_input {
-            return Err(("input exceeds byte limit", false));
+            return Err(failed("input exceeds byte limit", false));
         }
         file.write_all(&chunk)
             .await
-            .map_err(|_| ("cannot write input file", false))?;
+            .map_err(|_| failed("cannot write input file", false))?;
         if !chunk.is_empty() {
             touch(active);
         }
     }
     file.flush()
         .await
-        .map_err(|_| ("cannot flush input file", false))?;
+        .map_err(|_| failed("cannot flush input file", false))?;
     drop(file);
     Ok(())
 }
@@ -495,7 +506,7 @@ async fn upload(
 ) -> TransferResult {
     let file = tokio::fs::File::open(output)
         .await
-        .map_err(|_| ("cannot open output file", false))?;
+        .map_err(|_| failed("cannot open output file", false))?;
     let clock = active.last_progress.clone();
     let stream = ReaderStream::new(file).inspect(move |chunk| {
         if chunk.as_ref().is_ok_and(|bytes| !bytes.is_empty()) {
@@ -507,7 +518,7 @@ async fn upload(
         .body(reqwest::Body::wrap_stream(stream))
         .send()
         .await
-        .map_err(|_| ("output PUT failed", true))?;
+        .map_err(|_| failed("output PUT failed", true))?;
     let mut receipt = UploadResponse {
         status: response.status().as_u16(),
         headers: response
@@ -524,7 +535,7 @@ async fn upload(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| ("output PUT response interrupted", true))?
+        .map_err(|_| failed("output PUT response interrupted", true))?
     {
         if !chunk.is_empty() {
             touch(active);
@@ -537,11 +548,15 @@ async fn upload(
         }
     }
     receipt.body_base64 = STANDARD.encode(body);
-    let success = (200..300).contains(&receipt.status);
+    let receipt_status = receipt.status;
+    let success = (200..300).contains(&receipt_status);
     let retryable = retry_status(response.status());
     active.progress.lock().unwrap().outcome.upload_response = Some(receipt);
     if !success {
-        return Err(("output PUT returned non-success status", retryable));
+        return Err((
+            format!("output PUT returned HTTP {}", receipt_status),
+            retryable,
+        ));
     }
     Ok(())
 }
