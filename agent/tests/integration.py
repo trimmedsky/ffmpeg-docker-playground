@@ -411,15 +411,17 @@ with agent() as (_, url, token, root):
     submit(url, token, job("failed", "fail"))
     failure = terminal("failed")
     assert failure["state"] == "failed" and failure["result"]["ffmpeg_exit_code"] == 7
+    assert failure["result"]["error"] == "FFmpeg exited with code 7"
     assert "fixture encode error" in failure["ffmpeg_log"]
     missing = job("missing")
     missing["input"]["url"] = BASE + "/missing"
     submit(url, token, missing)
-    assert terminal("missing")["result"]["error"] == "input GET returned non-success status"
+    assert terminal("missing")["result"]["error"] == "input GET returned HTTP 404"
     bad_upload = job("bad-upload")
     bad_upload["output"]["url"] = BASE + "/upload-fail"
     submit(url, token, bad_upload)
-    assert terminal("bad-upload")["result"]["upload_response"]["status"] == 500
+    bad = terminal("bad-upload")["result"]
+    assert bad["upload_response"]["status"] == 500 and bad["error"] == "output PUT returned HTTP 500"
     submit(url, token, job("bounded-log", "log"))
     log = terminal("bounded-log")
     assert len(log["ffmpeg_log"].encode()) == 65536 and len(log["ffmpeg_log_tail"].encode()) <= 65536 and "LOG-END" in log["ffmpeg_log_tail"]

@@ -161,6 +161,11 @@ duplicates) and up to 64 KiB of raw response body. Header values and body use
 base64, so binary responses remain intact; the agent does not parse them.
 Non-2xx upload responses fail the job and are reported with their receipt.
 `upload_response` or `ffmpeg_exit_code` can be null when that stage was not reached.
+`error` is null on success. On failure it names the step and what was observed there,
+so the reason is readable without the log: for example `input GET returned HTTP 404`,
+`FFmpeg exited with code 1`, `FFmpeg was killed by signal 9`, `output PUT returned HTTP 500`,
+`job progress stalled`. A transport failure (no HTTP response) says so without the URL,
+which carries the caller's credentials.
 `ffmpeg_log` contains the first 64 KiB of FFmpeg stderr (or the entire log if
 smaller). When stderr exceeds that limit, `ffmpeg_log_tail` is also sent and
 contains up to the last 64 KiB after the retained prefix. Thus a long log retains
